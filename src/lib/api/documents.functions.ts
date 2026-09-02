@@ -316,11 +316,15 @@ export const getApprovedBundle = createServerFn({ method: "GET" })
       });
       stampsByDoc.set(h.document_id, list);
     }
-    const signedResults = await Promise.all(
-      (docs ?? []).map((d: any) =>
-        supabase.storage.from("documents").createSignedUrl(d.file_path, 60 * 60),
-      ),
-    );
+    const CONCURRENCY = 12;
+    const signedResults: Array<{ data: { signedUrl: string | null } | null; error: any }> = [];
+    for (let i = 0; i < (docs ?? []).length; i += CONCURRENCY) {
+      const batch = (docs ?? []).slice(i, i + CONCURRENCY);
+      const batchResults = await Promise.all(
+        batch.map((d: any) => supabase.storage.from("documents").createSignedUrl(d.file_path, 60 * 60)),
+      );
+      signedResults.push(...batchResults);
+    }
     const items = [];
     for (let i = 0; i < (docs ?? []).length; i++) {
       const d: any = (docs ?? [])[i];

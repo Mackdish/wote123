@@ -168,6 +168,7 @@ function Dashboard() {
       )}
 
       {isDp && <ApprovedArchive docs={approvedDocs} />}
+      {isAdmin && <ApprovedArchive docs={approvedDocs} />}
 
       {isTrainer && !isAdmin && !isHod && !isIqa && !isDp && (
         <QueueCard title="My submissions" docs={myDocs.slice(0, 8)} emptyLabel="You haven't submitted any documents yet." />

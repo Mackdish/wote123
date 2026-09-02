@@ -132,6 +132,8 @@ function Landing() {
                   <img
                     src={heroImage.url}
                     alt={heroImage.caption || "Wote Technical Training Institute campus"}
+                    loading="lazy"
+                    decoding="async"
                     className="h-[280px] w-full object-cover sm:h-[360px] lg:h-[440px]"
                   />
                 </figure>
@@ -290,6 +292,8 @@ function Gallery({ excludeId }: { excludeId?: string }) {
                 src={img.url}
                 alt={img.caption || "Wote Technical Training Institute"}
                 loading="lazy"
+                decoding="async"
+                fetchPriority="low"
                 className="h-56 w-full object-cover transition duration-300 group-hover:scale-105"
               />
               {img.caption && (
