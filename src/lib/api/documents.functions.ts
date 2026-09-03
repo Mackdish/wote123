@@ -1,7 +1,17 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireAppAuth } from "@/lib/auth-middleware";
-import type { AppRole, DocumentStatus } from "@/lib/types";
+import type { AppRole, DocumentStatus, DocumentType } from "@/lib/types";
+import JSZip from "jszip";
+
+const REVIEW_STAGES: Record<string, DocumentStatus[]> = {
+  all: [],
+  approved: ["approved"],
+  awaiting_dp: ["pending_dp"],
+  qa_cleared: ["pending_dp", "approved"],
+  in_review: ["pending_hod", "pending_iqa", "pending_dp"],
+  rejected: ["rejected_hod", "rejected_iqa", "rejected_dp"],
+};
 
 const submitSchema = z.object({
   title: z.string().trim().min(2).max(200),
@@ -464,4 +474,195 @@ export const deleteDocument = createServerFn({ method: "POST" })
     if (delErr) throw new Error(delErr.message);
     await logAudit(supabase, "document.delete", { document_id: doc.id, title: doc.title });
     return { ok: true };
+  });
+
+// ============================================================
+// Library folder download (server-side zip build)
+// ============================================================
+
+const libraryDownloadSchema = z.object({
+  department_id: z.string().uuid(),
+  trainer_id: z.string().uuid().nullable().optional(),
+  stage: z.string().optional(),
+  status: z.string().optional(),
+  type: z.string().optional(),
+  year: z.string().optional(),
+  term: z.string().optional(),
+});
+
+export const downloadLibraryFolder = createServerFn({ method: "POST" })
+  .middleware([requireAppAuth])
+  .inputValidator((d: unknown) => libraryDownloadSchema.parse(d))
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+
+    const { data: canView } = await supabase.rpc("can_view_library", { _user_id: userId });
+    if (!canView) throw new Error("Forbidden: the Document Library is limited to the Deputy Principal and Administrators.");
+
+    let q = supabase
+      .from("documents")
+      .select("id, title, file_path, file_name, document_type, trainer_id, department_id")
+      .order("created_at", { ascending: false });
+    q = q.eq("department_id", data.department_id);
+    if (data.trainer_id) q = q.eq("trainer_id", data.trainer_id);
+
+    const stageStatuses = (data.stage ? REVIEW_STAGES[data.stage] : []) ?? [];
+    if (stageStatuses.length) {
+      const statusOrs = stageStatuses.map((s) => `status.eq.${s}`).join(",");
+      q = q.or(statusOrs);
+    }
+    if (data.status && data.status !== "all") q = q.eq("status", data.status);
+    if (data.type && data.type !== "all") q = q.eq("document_type", data.type);
+    if (data.year && data.year !== "all") q = q.eq("academic_year", data.year);
+    if (data.term && data.term !== "all") q = q.eq("term", data.term);
+
+    const { data: docs, error } = await q;
+    if (error) throw new Error(error.message);
+    if (!docs?.length) throw new Error("No documents match these filters.");
+
+    const trainerIds = Array.from(new Set(docs.map((d: any) => d.trainer_id).filter(Boolean)));
+    const deptIds = Array.from(new Set(docs.map((d: any) => d.department_id).filter(Boolean)));
+    const [{ data: trainers }, { data: depts }] = await Promise.all([
+      trainerIds.length ? supabase.from("profiles").select("id, full_name").in("id", trainerIds) : Promise.resolve({ data: [] as any[] }),
+      deptIds.length ? supabase.from("departments").select("id, name").in("id", deptIds) : Promise.resolve({ data: [] as any[] }),
+    ]);
+    const trainerMap = new Map((trainers ?? []).map((t: any) => [t.id, t.full_name || t.email || "Unknown"]));
+    const deptMap = new Map((depts ?? []).map((d: any) => [d.id, d.name]));
+
+    const zip = new JSZip({ compression: "STORE" });
+    const CONCURRENCY = 12;
+    let ok = 0;
+    let failed = 0;
+
+    for (let i = 0; i < docs.length; i += CONCURRENCY) {
+      const batch = docs.slice(i, i + CONCURRENCY);
+      await Promise.all(batch.map(async (d: any) => {
+        try {
+          const { data: fileBlob, error: downloadError } = await supabase.storage.from("documents").download(d.file_path);
+          if (downloadError || !fileBlob) { failed++; return; }
+
+          const trainerName = trainerMap.get(d.trainer_id) || "Unknown";
+          const typeLabel = DOC_TYPE_LABELS[d.document_type as DocumentType] || "Documents";
+          const safeFileName = (d.file_name || `${d.title}.bin`).replace(/[\/\\?%*:|"<>]/g, "_");
+          const folderPath = data.trainer_id ? typeLabel : `${trainerName}/${typeLabel}`;
+          zip.folder(folderPath)!.file(safeFileName, fileBlob);
+          ok++;
+        } catch (err) {
+          console.error("[library-zip] failed to add", d.id, err);
+          failed++;
+        }
+      }));
+    }
+
+    if (!ok) throw new Error("Could not package any files");
+
+    const zipBlob = await zip.generateAsync({ type: "blob" });
+    const payload = docs.map((d: any) => d.id).join("|");
+    const hashBytes = new TextEncoder().encode(payload);
+    const hashArray = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", hashBytes)));
+    const signature = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+    const scope = data.trainer_id ?? data.department_id;
+    const path = `_library/${scope}-${signature}-${Date.now()}.zip`;
+    const { data: signed, error: uploadError } = await supabase.storage.from("documents").createSignedUploadUrl(path);
+    if (uploadError || !signed) throw new Error("Failed to create upload URL");
+
+    const { error: uploadToSignedError } = await supabase.storage.from("documents").uploadToSignedUrl(signed.path, signed.token, zipBlob, { contentType: "application/zip" });
+    if (uploadToSignedError) throw new Error(uploadToSignedError.message);
+
+    const { data: downloadSigned } = await supabase.storage.from("documents").createSignedUrl(path, 60 * 60);
+    const deptName = deptMap.get(data.department_id) || "department";
+    const filename = `library-${deptName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${new Date().toISOString().slice(0, 10)}.zip`;
+    return { url: downloadSigned?.signedUrl ?? null, doc_count: ok, filename };
+  });
+
+// ============================================================
+// Approved bundle zip build (server-side)
+// ============================================================
+
+export const buildApprovedBundleZip = createServerFn({ method: "POST" })
+  .middleware([requireAppAuth])
+  .inputValidator((d: unknown) => z.object({
+    department_id: z.string().uuid().nullable().optional(),
+    signature: z.string().min(8).max(64),
+  }).parse(d))
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    await assertBundleRole(supabase, userId);
+    const departmentId = data.department_id ?? null;
+
+    let q = supabase
+      .from("documents")
+      .select("id, title, file_path, file_name, document_type, academic_year, department_id, trainer_id")
+      .eq("status", "approved")
+      .order("created_at", { ascending: false });
+    if (departmentId) q = q.eq("department_id", departmentId);
+    const { data: docs, error } = await q;
+    if (error) throw new Error(error.message);
+    if (!docs?.length) throw new Error("No approved documents to download");
+
+    const trainerIds = Array.from(new Set(docs.map((d: any) => d.trainer_id).filter(Boolean)));
+    const deptIds = Array.from(new Set(docs.map((d: any) => d.department_id).filter(Boolean)));
+    const [{ data: trainers }, { data: depts }] = await Promise.all([
+      trainerIds.length ? supabase.from("profiles").select("id, full_name").in("id", trainerIds) : Promise.resolve({ data: [] as any[] }),
+      deptIds.length ? supabase.from("departments").select("id, name").in("id", deptIds) : Promise.resolve({ data: [] as any[] }),
+    ]);
+    const trainerMap = new Map((trainers ?? []).map((t: any) => [t.id, t.full_name || t.email || "Unknown"]));
+    const deptMap = new Map((depts ?? []).map((d: any) => [d.id, d.name]));
+
+    const zip = new JSZip({ compression: "STORE" });
+    const CONCURRENCY = 12;
+    let ok = 0;
+    let failed = 0;
+
+    for (let i = 0; i < docs.length; i += CONCURRENCY) {
+      const batch = docs.slice(i, i + CONCURRENCY);
+      await Promise.all(batch.map(async (d: any) => {
+        try {
+          const { data: fileBlob, error: downloadError } = await supabase.storage.from("documents").download(d.file_path);
+          if (downloadError || !fileBlob) { failed++; return; }
+
+          const deptName = d.department_id ? (deptMap.get(d.department_id) || "Unassigned") : "Unassigned";
+          const typeLabel = DOC_TYPE_LABELS[d.document_type as DocumentType] || "Documents";
+          const baseName = (d.file_name || `${d.title}.bin`).replace(/[\/\\?%*:|"<>]/g, "_");
+          zip.folder(deptName)!.folder(typeLabel)!.file(baseName, fileBlob);
+          ok++;
+        } catch (err) {
+          console.error("[bundle-zip] failed", d.id, err);
+          failed++;
+        }
+      }));
+    }
+
+    if (!ok) throw new Error("Could not package any files");
+
+    const zipBlob = await zip.generateAsync({ type: "blob" });
+    const path = `_bundles/${data.department_id ?? "all"}-${data.signature}-${Date.now()}.zip`;
+    const { data: signed, error: uploadError } = await supabase.storage.from("documents").createSignedUploadUrl(path);
+    if (uploadError || !signed) throw new Error("Failed to create upload URL");
+
+    const { error: uploadToSignedError } = await supabase.storage.from("documents").uploadToSignedUrl(signed.path, signed.token, zipBlob, { contentType: "application/zip" });
+    if (uploadToSignedError) throw new Error(uploadToSignedError.message);
+
+    let staleQ = supabase.from("bundle_cache").select("id, storage_path").neq("signature", data.signature);
+    staleQ = departmentId ? staleQ.eq("department_id", departmentId) : staleQ.is("department_id", null);
+    const { data: stale } = await staleQ;
+    if (stale?.length) {
+      const paths = stale.map((r: any) => r.storage_path).filter(Boolean);
+      if (paths.length) await supabase.storage.from("documents").remove(paths);
+      await supabase.from("bundle_cache").delete().in("id", stale.map((r: any) => r.id));
+    }
+    let sameQ = supabase.from("bundle_cache").delete().eq("signature", data.signature);
+    sameQ = departmentId ? sameQ.eq("department_id", departmentId) : sameQ.is("department_id", null);
+    await sameQ;
+    await supabase.from("bundle_cache").insert({
+      department_id: departmentId,
+      signature: data.signature,
+      storage_path: path,
+      doc_count: ok,
+      size_bytes: zipBlob.size,
+      created_by: userId,
+    });
+
+    const { data: downloadSigned } = await supabase.storage.from("documents").createSignedUrl(path, 60 * 60);
+    return { url: downloadSigned?.signedUrl ?? null, doc_count: ok, size_bytes: zipBlob.size };
   });

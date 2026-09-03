@@ -6,6 +6,7 @@ import { listDocuments } from "@/lib/api/documents.functions";
 import { listDeadlines, listDocumentTypeSettings } from "@/lib/api/settings.functions";
 import { listVisibleProfiles } from "@/lib/api/admin.functions";
 import { getMe } from "@/lib/api/auth.functions";
+import { downloadLibraryFolder } from "@/lib/api/documents.functions";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -13,7 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { StatusBadge } from "@/components/status-badge";
 import { DOC_TYPE_LABELS, STATUS_LABELS, type DocumentStatus, type DocumentType } from "@/lib/types";
-import { Building2, ChevronRight, FolderOpen, FileText, User, ArrowLeft, Home, Folder } from "lucide-react";
+import { Building2, ChevronRight, FolderOpen, FileText, User, ArrowLeft, Home, Folder, Download } from "lucide-react";
+import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/library")({
   head: () => ({
@@ -95,6 +97,34 @@ function LibraryPage() {
   const [status, setStatus] = useState("all");
   const [year, setYear] = useState("all");
   const [term, setTerm] = useState("all");
+  const [downloading, setDownloading] = useState(false);
+  const fetchDownload = useServerFn(downloadLibraryFolder);
+
+  async function handleDownload(departmentId: string, trainerId?: string | null) {
+    if (downloading) return;
+    setDownloading(true);
+    try {
+      const result = await fetchDownload({ data: {
+        department_id: departmentId,
+        trainer_id: trainerId ?? null,
+        stage,
+        status,
+        type,
+        year,
+        term,
+      } });
+      if (result.url) {
+        const a = document.createElement("a");
+        a.href = result.url;
+        a.download = result.filename || "library.zip";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      }
+    } catch (e: any) {
+      toast.error(e?.message ?? "Download failed");
+    } finally { setDownloading(false); }
+  }
 
   const all = (docsQ.data ?? []) as Doc[];
 
@@ -313,10 +343,21 @@ function LibraryPage() {
               <Card className="h-full transition hover:border-primary hover:shadow-sm">
                 <CardContent className="flex items-start gap-3 p-5">
                   <div className="grid h-11 w-11 place-items-center rounded-lg bg-primary-soft text-primary"><Building2 className="h-5 w-5" /></div>
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="truncate font-semibold text-foreground">{f.name}</div>
                     <div className="text-xs text-muted-foreground">{f.trainers.size} trainer folder{f.trainers.size === 1 ? "" : "s"} · {f.docs.length} document{f.docs.length === 1 ? "" : "s"}</div>
                   </div>
+                  {canViewLibrary && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={(e) => { e.stopPropagation(); handleDownload(f.id); }}
+                      disabled={downloading || f.docs.length === 0}
+                      title="Download department folder"
+                    >
+                      <Download className="h-4 w-4" />
+                    </Button>
+                  )}
                 </CardContent>
               </Card>
             </button>
@@ -331,10 +372,21 @@ function LibraryPage() {
                 <Card className="h-full transition hover:border-primary hover:shadow-sm">
                   <CardContent className="flex items-start gap-3 p-5">
                     <div className="grid h-11 w-11 place-items-center rounded-lg bg-accent/40 text-foreground"><User className="h-5 w-5" /></div>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="truncate font-semibold text-foreground">{t.name}</div>
                       <div className="text-xs text-muted-foreground">{t.docs.length} document{t.docs.length === 1 ? "" : "s"}</div>
                     </div>
+                    {canViewLibrary && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={(e) => { e.stopPropagation(); handleDownload(activeDept!.id, t.id); }}
+                        disabled={downloading || t.docs.length === 0}
+                        title="Download trainer folder"
+                      >
+                        <Download className="h-4 w-4" />
+                      </Button>
+                    )}
                   </CardContent>
                 </Card>
               </button>

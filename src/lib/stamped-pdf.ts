@@ -29,6 +29,10 @@ function currentStampDate() {
   return new Date().toLocaleDateString();
 }
 
+function stampDate(stamp: StampInput): string {
+  return stamp.date || currentStampDate();
+}
+
 /**
  * Render a .docx buffer visually into `pdf`. If `reservedBottomOnLastPage`
  * is > 0, the last page is extended with that much extra empty space at the
@@ -105,7 +109,7 @@ function drawStamp(
 ) {
   const scale = width / image.width;
   const height = image.height * scale;
-  const dateLine = `DATE: ${currentStampDate()}: APPROVED`;
+  const dateLine = `DATE: ${stampDate(stamp)}: APPROVED`;
   page.drawImage(image, { x, y: y + 18, width, height });
 
   const stampColor = stamp.role === "hod" ? PURPLE : BLUE;

@@ -2,9 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useState, useMemo, useEffect } from "react";
-import JSZip from "jszip";
-import { getDashboardStats, listDocuments, getApprovedBundle, getBundleCache, createBundleUploadUrl, finalizeBundleCache } from "@/lib/api/documents.functions";
-import { supabase } from "@/integrations/supabase/client";
+import { getDashboardStats, listDocuments, getBundleCache, buildApprovedBundleZip } from "@/lib/api/documents.functions";
 import { listDepartments } from "@/lib/api/admin.functions";
 import { listNotices } from "@/lib/api/notices.functions";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -268,12 +266,9 @@ function QueueCard({ title, docs, emptyLabel }: { title: string; docs: any[]; em
 }
 
 function ApprovedArchive({ docs }: { docs: any[] }) {
-  const fetchBundle = useServerFn(getApprovedBundle);
   const fetchDepts = useServerFn(listDepartments);
   const fetchCache = useServerFn(getBundleCache);
-  const createUpload = useServerFn(createBundleUploadUrl);
-  const finalizeCache = useServerFn(finalizeBundleCache);
-  const qc = useQueryClient();
+  const buildZip = useServerFn(buildApprovedBundleZip);
   const depts = useQuery({ queryKey: ["departments"], queryFn: () => fetchDepts() });
   const [zipping, setZipping] = useState(false);
   const [prebuilding, setPrebuilding] = useState(false);
@@ -299,82 +294,6 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
   const signature = cache.data?.signature ?? null;
   const isFresh = !!cached && cached.doc_count === filteredDocs.length;
 
-  async function buildAndCache(background: boolean): Promise<Blob | null> {
-    if (!signature) return null;
-    const items = await fetchBundle({ data: cacheArg });
-    if (!items.length) {
-      if (!background) toast.info("No approved documents to download");
-      return null;
-    }
-    const { buildStampedPdf } = await import("@/lib/stamped-pdf");
-    const zip = new JSZip();
-    let ok = 0;
-    let failed = 0;
-
-    async function processOne(it: any) {
-      try {
-        const deptFolder = (it.department_name ?? "Unassigned").replace(/[\/\\?%*:|"<>]/g, "_");
-        const typeFolder = DOC_TYPE_LABELS[it.document_type as DocumentType] ?? "Documents";
-        const baseName = (it.file_name || `${it.title}.bin`).replace(/[\/\\?%*:|"<>]/g, "_");
-        const stamps = (it.stamps ?? []) as any[];
-        if (stamps.length > 0) {
-          const bytes = await buildStampedPdf({
-            title: it.title,
-            meta: {
-              Type: DOC_TYPE_LABELS[it.document_type as DocumentType],
-              Department: it.department_name ?? "—",
-              "Academic Year": it.academic_year ?? "—",
-              Status: "approved",
-            },
-            fileUrl: it.url,
-            fileName: it.file_name,
-            stamps: stamps.map((s: any) => ({ role: s.role as "hod" | "iqa", approverName: s.approverName, date: s.date })),
-          });
-          const stampedName = baseName.replace(/\.[^.]+$/, "") + "_stamped.pdf";
-          zip.folder(deptFolder)!.folder(typeFolder)!.file(`${it.id.slice(0, 8)}-${stampedName}`, bytes as Uint8Array);
-        } else {
-          const res = await fetch(it.url);
-          if (!res.ok) { failed++; return; }
-          const blob = await res.blob();
-          zip.folder(deptFolder)!.folder(typeFolder)!.file(`${it.id.slice(0, 8)}-${baseName}`, blob);
-        }
-        ok++;
-      } catch (err) {
-        console.error("[zip] failed to stamp", it.id, err);
-        failed++;
-      }
-    }
-
-    const CONCURRENCY = 6;
-    for (let i = 0; i < items.length; i += CONCURRENCY) {
-      await Promise.all(items.slice(i, i + CONCURRENCY).map(processOne));
-    }
-    if (!ok) {
-      if (!background) toast.error("Could not package any files");
-      return null;
-    }
-    const blob = await zip.generateAsync({ type: "blob" });
-
-    // Upload to cache so future downloads are instant.
-    try {
-      const up = await createUpload({ data: { ...cacheArg, signature } });
-      const { error: upErr } = await supabase.storage
-        .from("documents")
-        .uploadToSignedUrl(up.path, up.token, blob, { contentType: "application/zip" });
-      if (upErr) throw upErr;
-      await finalizeCache({ data: {
-        ...cacheArg, signature, storage_path: up.path,
-        doc_count: items.length, size_bytes: blob.size,
-      } });
-      qc.invalidateQueries({ queryKey: cacheKey });
-    } catch (err) {
-      console.warn("[bundle-cache] upload failed", err);
-    }
-
-    if (!background && failed) toast.success(`Packaged ${ok} document${ok === 1 ? "" : "s"} (${failed} skipped)`);
-    return blob;
-  }
-
   function triggerBrowserDownload(url: string, filename: string) {
     const a = document.createElement("a");
     a.href = url; a.download = filename;
@@ -391,7 +310,6 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
 
   async function downloadZip() {
     if (zipping) return;
-    // Fast path: cached & up-to-date → just fetch the signed URL.
     if (cached && isFresh) {
       try {
         const res = await fetch(cached.url);
@@ -406,10 +324,17 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
         console.warn("[bundle-cache] cache fetch failed, rebuilding", err);
       }
     }
+    if (!signature) {
+      toast.error("No bundle signature available");
+      return;
+    }
     setZipping(true);
     try {
-      const blob = await buildAndCache(false);
-      if (!blob) return;
+      const result = await buildZip({ data: { ...cacheArg, signature } });
+      if (!result.url) throw new Error("Server did not return a download URL");
+      const res = await fetch(result.url);
+      if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+      const blob = await res.blob();
       const localUrl = URL.createObjectURL(blob);
       triggerBrowserDownload(localUrl, bundleFilename());
       URL.revokeObjectURL(localUrl);
@@ -419,7 +344,6 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
     } finally { setZipping(false); }
   }
 
-  // Background prebuild: when there are approved docs but no fresh cache, build silently.
   const [prebuiltFor, setPrebuiltFor] = useState<string | null>(null);
   useEffect(() => {
     if (cache.isLoading) return;
@@ -430,7 +354,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
     setPrebuilding(true);
     setPrebuiltFor(signature);
     (async () => {
-      try { await buildAndCache(true); } catch (err) { console.warn("[bundle-cache] prebuild failed", err); }
+      try { await buildZip({ data: { ...cacheArg, signature } }); } catch (err) { console.warn("[bundle-cache] prebuild failed", err); }
       finally { setPrebuilding(false); }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
