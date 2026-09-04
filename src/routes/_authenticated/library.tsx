@@ -114,12 +114,17 @@ function LibraryPage() {
         term,
       } });
       if (result.url) {
+        const res = await fetch(result.url);
+        if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+        const blob = await res.blob();
+        const localUrl = URL.createObjectURL(blob);
         const a = document.createElement("a");
-        a.href = result.url;
+        a.href = localUrl;
         a.download = result.filename || "library.zip";
         document.body.appendChild(a);
         a.click();
         a.remove();
+        URL.revokeObjectURL(localUrl);
       }
     } catch (e: any) {
       toast.error(e?.message ?? "Download failed");
