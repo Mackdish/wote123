@@ -529,7 +529,7 @@ export const downloadLibraryFolder = createServerFn({ method: "POST" })
     const trainerMap = new Map((trainers ?? []).map((t: any) => [t.id, t.full_name || t.email || "Unknown"]));
     const deptMap = new Map((depts ?? []).map((d: any) => [d.id, d.name]));
 
-    const zip = new JSZip({ compression: "STORE" });
+    const zip = new JSZip();
     const CONCURRENCY = 20;
     let ok = 0;
     let failed = 0;
@@ -545,7 +545,7 @@ export const downloadLibraryFolder = createServerFn({ method: "POST" })
           const typeLabel = DOC_TYPE_LABELS[d.document_type as DocumentType] || "Documents";
           const safeFileName = (d.file_name || `${d.title}.bin`).replace(/[\/\\?%*:|"<>]/g, "_");
           const folderPath = data.trainer_id ? typeLabel : `${trainerName}/${typeLabel}`;
-          zip.folder(folderPath)!.file(safeFileName, fileBlob);
+          zip.folder(folderPath)!.file(safeFileName, fileBlob, { compression: "STORE" });
           ok++;
         } catch (err) {
           console.error("[library-zip] failed to add", d.id, err);
@@ -609,7 +609,7 @@ export const buildApprovedBundleZip = createServerFn({ method: "POST" })
     const trainerMap = new Map((trainers ?? []).map((t: any) => [t.id, t.full_name || t.email || "Unknown"]));
     const deptMap = new Map((depts ?? []).map((d: any) => [d.id, d.name]));
 
-    const zip = new JSZip({ compression: "STORE" });
+    const zip = new JSZip();
     const CONCURRENCY = 20;
     let ok = 0;
     let failed = 0;
@@ -624,7 +624,7 @@ export const buildApprovedBundleZip = createServerFn({ method: "POST" })
           const deptName = d.department_id ? (deptMap.get(d.department_id) || "Unassigned") : "Unassigned";
           const typeLabel = DOC_TYPE_LABELS[d.document_type as DocumentType] || "Documents";
           const baseName = (d.file_name || `${d.title}.bin`).replace(/[\/\\?%*:|"<>]/g, "_");
-          zip.folder(deptName)!.folder(typeLabel)!.file(baseName, fileBlob);
+          zip.folder(deptName)!.folder(typeLabel)!.file(baseName, fileBlob, { compression: "STORE" });
           ok++;
         } catch (err) {
           console.error("[bundle-zip] failed", d.id, err);
