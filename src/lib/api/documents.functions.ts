@@ -570,13 +570,13 @@ export const downloadLibraryFolder = createServerFn({ method: "POST" })
             failed++;
             return;
           }
-          const fileBlob = await res.blob();
+          const fileBuffer = await res.arrayBuffer();
 
           const trainerName = trainerMap.get(d.trainer_id) || "Unknown";
           const typeLabel = DOC_TYPE_LABELS[d.document_type as DocumentType] || "Documents";
           const safeFileName = (d.file_name || `${d.title}.bin`).replace(/[\/\\?%*:|"<>]/g, "_");
           const folderPath = data.trainer_id ? typeLabel : `${trainerName}/${typeLabel}`;
-          zip.folder(folderPath)!.file(safeFileName, fileBlob, { compression: "STORE" });
+          zip.folder(folderPath)!.file(safeFileName, fileBuffer, { compression: "STORE" });
           ok++;
         } catch (err) {
           console.error("[library-zip] failed to add", d.id, err);
@@ -666,12 +666,12 @@ export const buildApprovedBundleZip = createServerFn({ method: "POST" })
             failed++;
             return;
           }
-          const fileBlob = await res.blob();
+          const fileBuffer = await res.arrayBuffer();
 
           const deptName = d.department_id ? (deptMap.get(d.department_id) || "Unassigned") : "Unassigned";
           const typeLabel = DOC_TYPE_LABELS[d.document_type as DocumentType] || "Documents";
           const baseName = (d.file_name || `${d.title}.bin`).replace(/[\/\\?%*:|"<>]/g, "_");
-          zip.folder(deptName)!.folder(typeLabel)!.file(baseName, fileBlob, { compression: "STORE" });
+          zip.folder(deptName)!.folder(typeLabel)!.file(baseName, fileBuffer, { compression: "STORE" });
           ok++;
         } catch (err) {
           console.error("[bundle-zip] failed", d.id, err);
