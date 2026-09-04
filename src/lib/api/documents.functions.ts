@@ -538,8 +538,19 @@ export const downloadLibraryFolder = createServerFn({ method: "POST" })
       const batch = docs.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map(async (d: any) => {
         try {
-          const { data: fileBlob, error: downloadError } = await supabase.storage.from("documents").download(d.file_path);
-          if (downloadError || !fileBlob) { failed++; return; }
+          const { data: signed, error: signedError } = await supabase.storage.from("documents").createSignedUrl(d.file_path, 60 * 60);
+          if (signedError || !signed?.signedUrl) {
+            console.error("[library-zip] signed URL failed", d.id, d.file_path, signedError);
+            failed++;
+            return;
+          }
+          const res = await fetch(signed.signedUrl);
+          if (!res.ok) {
+            console.error("[library-zip] fetch failed", d.id, d.file_path, res.status);
+            failed++;
+            return;
+          }
+          const fileBlob = await res.blob();
 
           const trainerName = trainerMap.get(d.trainer_id) || "Unknown";
           const typeLabel = DOC_TYPE_LABELS[d.document_type as DocumentType] || "Documents";
@@ -554,7 +565,7 @@ export const downloadLibraryFolder = createServerFn({ method: "POST" })
       }));
     }
 
-    if (!ok) throw new Error("Could not package any files");
+    if (!ok) throw new Error(`Could not package any files. ${failed} of ${docs.length} downloads failed.`);
 
     const zipBlob = await zip.generateAsync({ type: "blob" });
     const payload = docs.map((d: any) => d.id).join("|");
@@ -618,8 +629,19 @@ export const buildApprovedBundleZip = createServerFn({ method: "POST" })
       const batch = docs.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map(async (d: any) => {
         try {
-          const { data: fileBlob, error: downloadError } = await supabase.storage.from("documents").download(d.file_path);
-          if (downloadError || !fileBlob) { failed++; return; }
+          const { data: signed, error: signedError } = await supabase.storage.from("documents").createSignedUrl(d.file_path, 60 * 60);
+          if (signedError || !signed?.signedUrl) {
+            console.error("[bundle-zip] signed URL failed", d.id, d.file_path, signedError);
+            failed++;
+            return;
+          }
+          const res = await fetch(signed.signedUrl);
+          if (!res.ok) {
+            console.error("[bundle-zip] fetch failed", d.id, d.file_path, res.status);
+            failed++;
+            return;
+          }
+          const fileBlob = await res.blob();
 
           const deptName = d.department_id ? (deptMap.get(d.department_id) || "Unassigned") : "Unassigned";
           const typeLabel = DOC_TYPE_LABELS[d.document_type as DocumentType] || "Documents";
@@ -633,7 +655,7 @@ export const buildApprovedBundleZip = createServerFn({ method: "POST" })
       }));
     }
 
-    if (!ok) throw new Error("Could not package any files");
+    if (!ok) throw new Error(`Could not package any files. ${failed} of ${docs.length} downloads failed.`);
 
     const zipBlob = await zip.generateAsync({ type: "blob" });
     const path = `_bundles/${data.department_id ?? "all"}-${data.signature}-${Date.now()}.zip`;
