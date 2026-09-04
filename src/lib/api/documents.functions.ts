@@ -530,7 +530,7 @@ export const downloadLibraryFolder = createServerFn({ method: "POST" })
     const deptMap = new Map((depts ?? []).map((d: any) => [d.id, d.name]));
 
     const zip = new JSZip({ compression: "STORE" });
-    const CONCURRENCY = 12;
+    const CONCURRENCY = 20;
     let ok = 0;
     let failed = 0;
 
@@ -610,7 +610,7 @@ export const buildApprovedBundleZip = createServerFn({ method: "POST" })
     const deptMap = new Map((depts ?? []).map((d: any) => [d.id, d.name]));
 
     const zip = new JSZip({ compression: "STORE" });
-    const CONCURRENCY = 12;
+    const CONCURRENCY = 20;
     let ok = 0;
     let failed = 0;
 
