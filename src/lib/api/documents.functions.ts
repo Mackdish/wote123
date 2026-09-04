@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { z } from "zod";
 import { requireAppAuth } from "@/lib/auth-middleware";
-import type { AppRole, DocumentStatus, DocumentType } from "@/lib/types";
+import { DOC_TYPE_LABELS, type AppRole, type DocumentStatus, type DocumentType } from "@/lib/types";
 import JSZip from "jszip";
 
 const REVIEW_STAGES: Record<string, DocumentStatus[]> = {
@@ -239,9 +239,18 @@ export const getDocument = createServerFn({ method: "GET" })
       const { data: d } = await supabase.from("departments").select("id, name").eq("id", doc.department_id).maybeSingle();
       dept = d ?? null;
     }
-    const { data: signed } = await supabase.storage
-      .from("documents")
-      .createSignedUrl(doc.file_path, 60 * 30, { download: doc.file_name });
+    let file_url: string | null = null;
+    if (doc.file_path) {
+      try {
+        const { data: signed } = await supabase.storage
+          .from("documents")
+          .createSignedUrl(doc.file_path, 60 * 30, { download: doc.file_name });
+        file_url = signed?.signedUrl ?? null;
+      } catch (e) {
+        console.error("[getDocument] createSignedUrl failed", doc.id, doc.file_path, e);
+        file_url = null;
+      }
+    }
     let rootId = doc.id;
     let cursorParent: string | null = doc.parent_document_id ?? null;
     while (cursorParent) {
@@ -262,7 +271,7 @@ export const getDocument = createServerFn({ method: "GET" })
       trainer: pMap.get(doc.trainer_id) ?? null,
       department: dept,
       history: (history ?? []).map((h: any) => ({ ...h, approver: pMap.get(h.approver_id) ?? null })),
-      file_url: signed?.signedUrl ?? null,
+      file_url,
       versions: chain ?? [],
     };
   });
@@ -331,7 +340,13 @@ export const getApprovedBundle = createServerFn({ method: "GET" })
     for (let i = 0; i < (docs ?? []).length; i += CONCURRENCY) {
       const batch = (docs ?? []).slice(i, i + CONCURRENCY);
       const batchResults = await Promise.all(
-        batch.map((d: any) => supabase.storage.from("documents").createSignedUrl(d.file_path, 60 * 60)),
+        batch.map(async (d: any) => {
+          if (!d.file_path) {
+            console.error("[getApprovedBundle] missing file_path", d.id);
+            return { data: null, error: new Error("file_path is null") };
+          }
+          return supabase.storage.from("documents").createSignedUrl(d.file_path, 60 * 60);
+        }),
       );
       signedResults.push(...batchResults);
     }
@@ -538,6 +553,11 @@ export const downloadLibraryFolder = createServerFn({ method: "POST" })
       const batch = docs.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map(async (d: any) => {
         try {
+          if (!d.file_path) {
+            console.error("[library-zip] missing file_path", d.id);
+            failed++;
+            return;
+          }
           const { data: signed, error: signedError } = await supabase.storage.from("documents").createSignedUrl(d.file_path, 60 * 60);
           if (signedError || !signed?.signedUrl) {
             console.error("[library-zip] signed URL failed", d.id, d.file_path, signedError);
@@ -629,6 +649,11 @@ export const buildApprovedBundleZip = createServerFn({ method: "POST" })
       const batch = docs.slice(i, i + CONCURRENCY);
       await Promise.all(batch.map(async (d: any) => {
         try {
+          if (!d.file_path) {
+            console.error("[bundle-zip] missing file_path", d.id);
+            failed++;
+            return;
+          }
           const { data: signed, error: signedError } = await supabase.storage.from("documents").createSignedUrl(d.file_path, 60 * 60);
           if (signedError || !signed?.signedUrl) {
             console.error("[bundle-zip] signed URL failed", d.id, d.file_path, signedError);
