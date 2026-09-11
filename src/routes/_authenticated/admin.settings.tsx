@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { getMe } from "@/lib/api/auth.functions";
 import { getAcademicPeriod, setAcademicPeriod } from "@/lib/api/academic-period.functions";
 import { listReportPermissions, setReportPermission, listLibraryPermissions, setLibraryPermission, listDocumentTypeSettings, updateDocumentTypeSetting } from "@/lib/api/settings.functions";
@@ -12,15 +12,15 @@ import { Button } from "@/components/ui/button";
 import { ROLE_LABELS, DOC_TYPE_LABELS, type AppRole, type DocumentType } from "@/lib/types";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/_authenticated/admin/settings")({ head: () => ({ meta: [{ title: "Access & Document Types — WTTI SWMS" }, { name: "description", content: "Control access, document types and the current academic period." }] }), component: SettingsPage });
+export const Route = createFileRoute("/_authenticated/admin/settings")({ head: () => ({ meta: [{ title: "Access & Document Types — WTTI SWMS" }] }), component: SettingsPage });
 
 function SettingsPage() {
   const fetchMe = useServerFn(getMe); const me = useQuery({ queryKey: ["me"], queryFn: () => fetchMe() }); const isAdmin = me.data?.roles.includes("admin");
   const fetchPerms = useServerFn(listReportPermissions); const savePerm = useServerFn(setReportPermission); const fetchLibraryPerms = useServerFn(listLibraryPermissions); const saveLibraryPerm = useServerFn(setLibraryPermission); const fetchTypes = useServerFn(listDocumentTypeSettings); const saveType = useServerFn(updateDocumentTypeSetting); const fetchPeriod = useServerFn(getAcademicPeriod); const savePeriod = useServerFn(setAcademicPeriod); const qc = useQueryClient();
   const perms = useQuery({ queryKey: ["report-permissions"], queryFn: () => fetchPerms(), enabled: !!isAdmin }); const libraryPerms = useQuery({ queryKey: ["library-permissions"], queryFn: () => fetchLibraryPerms(), enabled: !!isAdmin }); const types = useQuery({ queryKey: ["doc-type-settings"], queryFn: () => fetchTypes(), enabled: !!isAdmin }); const period = useQuery({ queryKey: ["academic-period"], queryFn: () => fetchPeriod(), enabled: !!isAdmin });
   const [year, setYear] = useState(""); const [term, setTerm] = useState("Term 1"); const [savingPeriod, setSavingPeriod] = useState(false);
+  useEffect(() => { if (period.data) { setYear(period.data.academic_year); setTerm(period.data.term); } }, [period.data]);
   if (me.isLoading) return <div className="text-sm text-muted-foreground">Loading…</div>; if (!isAdmin) return <div className="text-sm text-muted-foreground">Administrators only.</div>;
-  if (period.data && !year) { setYear(period.data.academic_year); setTerm(period.data.term); }
   async function saveAcademicPeriod() { if (!year.trim() || !term.trim()) return toast.error("Academic year and term are required"); setSavingPeriod(true); try { await savePeriod({ data: { academic_year: year.trim(), term: term.trim() } }); await qc.invalidateQueries({ queryKey: ["academic-period"] }); toast.success("Academic year and term updated"); } catch (e: any) { toast.error(e.message ?? "Could not update academic period"); } finally { setSavingPeriod(false); } }
   async function togglePerm(role: AppRole, value: boolean) { try { await savePerm({ data: { role, can_view_reports: value } }); qc.invalidateQueries({ queryKey: ["report-permissions"] }); qc.invalidateQueries({ queryKey: ["me"] }); toast.success(`Reports ${value ? "enabled" : "hidden"} for ${ROLE_LABELS[role]}`); } catch (e: any) { toast.error(e.message ?? "Could not update"); } }
   async function toggleLibraryPerm(role: AppRole, value: boolean) { try { await saveLibraryPerm({ data: { role, can_view_library: value } }); qc.invalidateQueries({ queryKey: ["library-permissions"] }); qc.invalidateQueries({ queryKey: ["me"] }); toast.success(`Document Library ${value ? "enabled" : "hidden"} for ${ROLE_LABELS[role]}`); } catch (e: any) { toast.error(e.message ?? "Could not update"); } }
