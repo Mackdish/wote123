@@ -45,6 +45,8 @@ begin
 end;
 $$;
 
+revoke all on function public.apply_current_academic_period() from public, anon, authenticated;
+
 drop trigger if exists documents_apply_current_academic_period on public.documents;
 create trigger documents_apply_current_academic_period
 before insert on public.documents
