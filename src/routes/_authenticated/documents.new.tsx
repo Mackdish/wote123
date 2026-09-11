@@ -4,7 +4,8 @@ import { z } from "zod";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { submitDocument } from "@/lib/api/documents.functions";
+import { submitDocumentForCurrentPeriod } from "@/lib/api/document-submission.functions";
+import { getAcademicPeriod } from "@/lib/api/academic-period.functions";
 import { listDepartments } from "@/lib/api/admin.functions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -25,13 +26,15 @@ export const Route = createFileRoute("/_authenticated/documents/new")({
 function SubmitPage() {
   const navigate = useNavigate();
   const { parent } = useSearch({ from: "/_authenticated/documents/new" });
-  const submit = useServerFn(submitDocument);
+  const submit = useServerFn(submitDocumentForCurrentPeriod);
   const fetchDepts = useServerFn(listDepartments);
+  const fetchPeriod = useServerFn(getAcademicPeriod);
   const depts = useQuery({ queryKey: ["departments"], queryFn: () => fetchDepts() });
+  const period = useQuery({ queryKey: ["academic-period"], queryFn: () => fetchPeriod() });
 
   const [form, setForm] = useState({
-    title: "", description: "", document_type: "scheme_of_work" as DocumentType,
-    subject: "", course: "", class_name: "", academic_year: "", term: "", week: "", session: "",
+    description: "", document_type: "scheme_of_work" as DocumentType,
+    subject: "", course: "", class_name: "", week: "", session: "",
     department_id: "" as string,
   });
   const [file, setFile] = useState<File | null>(null);
@@ -50,17 +53,13 @@ function SubmitPage() {
       const path = `${u.user.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
       const { error: upErr } = await supabase.storage.from("documents").upload(path, file, { contentType: file.type });
       if (upErr) throw upErr;
-      const res = await submit({
-        data: {
-          title: form.title, description: form.description || null, document_type: form.document_type,
-          subject: form.subject || null, course: form.course || null,
-          class_name: form.class_name || null, academic_year: form.academic_year || null,
-          term: form.term || null, week: form.week || null, session: form.session || null,
-          file_path: path, file_name: file.name, mime_type: file.type,
-          department_id: form.department_id || null,
-          parent_document_id: parent ?? null,
-        },
-      });
+      const res = await submit({ data: {
+        description: form.description || null, document_type: form.document_type,
+        subject: form.subject || null, course: form.course || null,
+        class_name: form.class_name || null, week: form.week || null, session: form.session || null,
+        file_path: path, file_name: file.name, mime_type: file.type,
+        department_id: form.department_id || null, parent_document_id: parent ?? null,
+      } });
       toast.success(parent ? "New version submitted for review" : "Document submitted for review");
       navigate({ to: "/documents/$id", params: { id: res.id } });
     } catch (err: any) {
@@ -73,18 +72,19 @@ function SubmitPage() {
       <div>
         <h1 className="text-2xl font-bold">{parent ? "Upload new version" : "Submit document"}</h1>
         <p className="text-sm text-muted-foreground">
-          {parent
-            ? "Uploading a revised version. Once approved, it will become the current version and older ones will be archived."
-            : "Upload a Scheme of Work, Session Plan, Record of Work, Learning Plan, Lesson Notes, Assessment or other institutional document for review."}
+          {parent ? "Upload a revised version for the same controlled academic period." : "Upload an institutional document for review. The administrator controls the academic year and term."}
         </p>
       </div>
       <Card>
         <CardHeader><CardTitle>Document details</CardTitle></CardHeader>
         <CardContent>
+          <div className="mb-4 rounded-lg border bg-muted/30 p-3 text-sm">
+            <div className="font-medium">Current academic period</div>
+            <div className="mt-1 text-muted-foreground">
+              {period.isLoading ? "Loading…" : period.data ? `${period.data.academic_year} · ${period.data.term}` : "Not configured by administrator"}
+            </div>
+          </div>
           <form onSubmit={handle} className="grid gap-4 md:grid-cols-2">
-            <Field label="Title *" className="md:col-span-2">
-              <Input value={form.title} onChange={(e) => set("title")(e.target.value)} required maxLength={200} />
-            </Field>
             <Field label="Document type *">
               <Select value={form.document_type} onValueChange={(v) => set("document_type")(v)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -100,25 +100,20 @@ function SubmitPage() {
                   {(depts.data ?? []).map((d: any) => <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>)}
                 </SelectContent>
               </Select>
-              <p className="mt-1 text-xs text-muted-foreground">Required if your account has no default department. Determines which HOD reviews your submission.</p>
+              <p className="mt-1 text-xs text-muted-foreground">Required if your account has no default department.</p>
             </Field>
             <Field label="Unit"><Input value={form.subject} onChange={(e) => set("subject")(e.target.value)} placeholder="e.g. Unit 3 — Engine Systems" /></Field>
             <Field label="Course"><Input value={form.course} onChange={(e) => set("course")(e.target.value)} placeholder="e.g. Diploma in Automotive Engineering" /></Field>
             <Field label="Class"><Input value={form.class_name} onChange={(e) => set("class_name")(e.target.value)} placeholder="e.g. Diploma Y2" /></Field>
-            <Field label="Academic Year"><Input value={form.academic_year} onChange={(e) => set("academic_year")(e.target.value)} placeholder="2025/2026" /></Field>
-            <Field label="Term"><Input value={form.term} onChange={(e) => set("term")(e.target.value)} placeholder="Term 1" /></Field>
             <Field label="Week"><Input value={form.week} onChange={(e) => set("week")(e.target.value)} placeholder="3" /></Field>
             <Field label="Session"><Input value={form.session} onChange={(e) => set("session")(e.target.value)} placeholder="Morning" /></Field>
-            <Field label="Description" className="md:col-span-2">
-              <Textarea value={form.description} onChange={(e) => set("description")(e.target.value)} rows={3} maxLength={2000} />
-            </Field>
+            <Field label="Description" className="md:col-span-2"><Textarea value={form.description} onChange={(e) => set("description")(e.target.value)} rows={3} maxLength={2000} /></Field>
             <Field label="File * (PDF, DOCX, XLSX — max 20 MB)" className="md:col-span-2">
-              <Input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                onChange={(e) => setFile(e.target.files?.[0] ?? null)} required />
+              <Input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={(e) => setFile(e.target.files?.[0] ?? null)} required />
             </Field>
             <div className="md:col-span-2 flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => navigate({ to: "/documents" })}>Cancel</Button>
-              <Button type="submit" disabled={loading}>
+              <Button type="submit" disabled={loading || !period.data}>
                 {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
                 Submit for review
               </Button>
@@ -131,10 +126,5 @@ function SubmitPage() {
 }
 
 function Field({ label, children, className = "" }: { label: string; children: React.ReactNode; className?: string }) {
-  return (
-    <div className={`space-y-2 ${className}`}>
-      <Label>{label}</Label>
-      {children}
-    </div>
-  );
+  return <div className={`space-y-2 ${className}`}><Label>{label}</Label>{children}</div>;
 }
