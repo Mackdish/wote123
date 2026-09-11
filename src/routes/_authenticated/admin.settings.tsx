@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { getMe } from "@/lib/api/auth.functions";
+import { getAcademicPeriod, setAcademicPeriod } from "@/lib/api/academic-period.functions";
 import {
   listReportPermissions, setReportPermission,
   listLibraryPermissions, setLibraryPermission,
@@ -10,16 +11,12 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { ROLE_LABELS, DOC_TYPE_LABELS, type AppRole, type DocumentType } from "@/lib/types";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/admin/settings")({
-  head: () => ({
-    meta: [
-      { title: "Access & Document Types — WTTI SWMS" },
-      { name: "description", content: "Control which roles can view reports and which document types are available." },
-    ],
-  }),
+  head: () => ({ meta: [{ title: "Access & Document Types — WTTI SWMS" }, { name: "description", content: "Control access, document types and the current academic period." }] }),
   component: SettingsPage,
 });
 
@@ -27,126 +24,62 @@ function SettingsPage() {
   const fetchMe = useServerFn(getMe);
   const me = useQuery({ queryKey: ["me"], queryFn: () => fetchMe() });
   const isAdmin = me.data?.roles.includes("admin");
-
   const fetchPerms = useServerFn(listReportPermissions);
   const savePerm = useServerFn(setReportPermission);
   const fetchLibraryPerms = useServerFn(listLibraryPermissions);
   const saveLibraryPerm = useServerFn(setLibraryPermission);
   const fetchTypes = useServerFn(listDocumentTypeSettings);
   const saveType = useServerFn(updateDocumentTypeSetting);
+  const fetchPeriod = useServerFn(getAcademicPeriod);
+  const savePeriod = useServerFn(setAcademicPeriod);
   const qc = useQueryClient();
-
   const perms = useQuery({ queryKey: ["report-permissions"], queryFn: () => fetchPerms(), enabled: !!isAdmin });
   const libraryPerms = useQuery({ queryKey: ["library-permissions"], queryFn: () => fetchLibraryPerms(), enabled: !!isAdmin });
   const types = useQuery({ queryKey: ["doc-type-settings"], queryFn: () => fetchTypes(), enabled: !!isAdmin });
+  const period = useQuery({ queryKey: ["academic-period"], queryFn: () => fetchPeriod(), enabled: !!isAdmin });
+  const [year, setYear] = useStateValue(period.data?.academic_year ?? "");
+  const [term, setTerm] = useStateValue(period.data?.term ?? "Term 1");
+  const [savingPeriod, setSavingPeriod] = useStateValue(false);
 
   if (me.isLoading) return <div className="text-sm text-muted-foreground">Loading…</div>;
   if (!isAdmin) return <div className="text-sm text-muted-foreground">Administrators only.</div>;
 
-  async function togglePerm(role: AppRole, value: boolean) {
+  async function saveAcademicPeriod() {
+    if (!year.trim() || !term.trim()) return toast.error("Academic year and term are required");
+    setSavingPeriod(true);
     try {
-      await savePerm({ data: { role, can_view_reports: value } });
-      qc.invalidateQueries({ queryKey: ["report-permissions"] });
-      qc.invalidateQueries({ queryKey: ["me"] });
-      toast.success(`Reports ${value ? "enabled" : "hidden"} for ${ROLE_LABELS[role]}`);
-    } catch (e: any) { toast.error(e.message ?? "Could not update"); }
+      await savePeriod({ data: { academic_year: year.trim(), term: term.trim() } });
+      await qc.invalidateQueries({ queryKey: ["academic-period"] });
+      toast.success("Academic year and term updated");
+    } catch (e: any) { toast.error(e.message ?? "Could not update academic period"); }
+    finally { setSavingPeriod(false); }
   }
-
-  async function toggleLibraryPerm(role: AppRole, value: boolean) {
-    try {
-      await saveLibraryPerm({ data: { role, can_view_library: value } });
-      qc.invalidateQueries({ queryKey: ["library-permissions"] });
-      qc.invalidateQueries({ queryKey: ["me"] });
-      toast.success(`Document Library ${value ? "enabled" : "hidden"} for ${ROLE_LABELS[role]}`);
-    } catch (e: any) { toast.error(e.message ?? "Could not update"); }
-  }
-
-  async function patchType(document_type: DocumentType, patch: { label?: string; active?: boolean }) {
-    try {
-      await saveType({ data: { document_type, ...patch } });
-      qc.invalidateQueries({ queryKey: ["doc-type-settings"] });
-    } catch (e: any) { toast.error(e.message ?? "Could not update"); }
-  }
+  async function togglePerm(role: AppRole, value: boolean) { try { await savePerm({ data: { role, can_view_reports: value } }); qc.invalidateQueries({ queryKey: ["report-permissions"] }); qc.invalidateQueries({ queryKey: ["me"] }); toast.success(`Reports ${value ? "enabled" : "hidden"} for ${ROLE_LABELS[role]}`); } catch (e: any) { toast.error(e.message ?? "Could not update"); } }
+  async function toggleLibraryPerm(role: AppRole, value: boolean) { try { await saveLibraryPerm({ data: { role, can_view_library: value } }); qc.invalidateQueries({ queryKey: ["library-permissions"] }); qc.invalidateQueries({ queryKey: ["me"] }); toast.success(`Document Library ${value ? "enabled" : "hidden"} for ${ROLE_LABELS[role]}`); } catch (e: any) { toast.error(e.message ?? "Could not update"); } }
+  async function patchType(document_type: DocumentType, patch: { label?: string; active?: boolean }) { try { await saveType({ data: { document_type, ...patch } }); qc.invalidateQueries({ queryKey: ["doc-type-settings"] }); } catch (e: any) { toast.error(e.message ?? "Could not update"); } }
 
   return (
     <div className="space-y-5">
-      <div>
-        <h1 className="text-2xl font-bold">Access & document types</h1>
-        <p className="text-sm text-muted-foreground">Decide who can see reports and the Document Library, and manage the list of document types trainers can submit.</p>
-      </div>
-
+      <div><h1 className="text-2xl font-bold">Access & document settings</h1><p className="text-sm text-muted-foreground">Configure the controlled academic period, access permissions and document types.</p></div>
       <Card>
-        <CardHeader><CardTitle>Report access by role</CardTitle></CardHeader>
-        <CardContent className="divide-y p-0">
-          {(perms.data ?? []).map((p) => (
-            <div key={p.role} className="flex items-center justify-between px-4 py-3">
-              <div className="text-sm font-medium">{ROLE_LABELS[p.role]}</div>
-              <Switch
-                checked={p.can_view_reports}
-                disabled={p.role === "admin"}
-                onCheckedChange={(v) => togglePerm(p.role, v)}
-              />
-            </div>
-          ))}
-          {(perms.data ?? []).length === 0 && (
-            <div className="p-6 text-center text-sm text-muted-foreground">No roles configured.</div>
-          )}
+        <CardHeader><CardTitle>Current academic year & term</CardTitle></CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">Only administrators can change this period. Trainers will no longer enter the academic year or term when uploading documents.</p>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div><label className="text-sm font-medium">Academic Year</label><Input className="mt-2" value={year} onChange={(e) => setYear(e.target.value)} placeholder="2026/2027" /></div>
+            <div><label className="text-sm font-medium">Term</label><Input className="mt-2" value={term} onChange={(e) => setTerm(e.target.value)} placeholder="Term 1" /></div>
+          </div>
+          <Button onClick={saveAcademicPeriod} disabled={savingPeriod}>{savingPeriod ? "Saving…" : "Save academic period"}</Button>
         </CardContent>
       </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle>Document Library access by role</CardTitle>
-        </CardHeader>
-        <CardContent className="divide-y p-0">
-          <p className="px-4 pb-2 pt-3 text-xs text-muted-foreground">
-            Controls who can browse the Department → Trainer → Document type folder view. Off by default for HOD, IQA and Trainer.
-          </p>
-          {(libraryPerms.data ?? []).map((p) => (
-            <div key={p.role} className="flex items-center justify-between px-4 py-3">
-              <div className="text-sm font-medium">{ROLE_LABELS[p.role]}</div>
-              <Switch
-                checked={p.can_view_library}
-                disabled={p.role === "admin"}
-                onCheckedChange={(v) => toggleLibraryPerm(p.role, v)}
-              />
-            </div>
-          ))}
-          {(libraryPerms.data ?? []).length === 0 && (
-            <div className="p-6 text-center text-sm text-muted-foreground">No roles configured.</div>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader><CardTitle>Document types</CardTitle></CardHeader>
-        <CardContent className="divide-y p-0">
-          {(types.data ?? []).map((t: any) => (
-            <div key={t.document_type} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-              <div className="min-w-0 flex-1">
-                <div className="text-xs uppercase tracking-wider text-muted-foreground">
-                  {DOC_TYPE_LABELS[t.document_type as DocumentType]}
-                </div>
-                <Input
-                  className="mt-1 max-w-sm"
-                  defaultValue={t.label ?? DOC_TYPE_LABELS[t.document_type as DocumentType]}
-                  onBlur={(e) => {
-                    const v = e.target.value.trim();
-                    if (v && v !== (t.label ?? "")) patchType(t.document_type, { label: v });
-                  }}
-                />
-              </div>
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-muted-foreground">{t.active ? "Available" : "Hidden"}</span>
-                <Switch checked={t.active} onCheckedChange={(v) => patchType(t.document_type, { active: v })} />
-              </div>
-            </div>
-          ))}
-          {(types.data ?? []).length === 0 && (
-            <div className="p-6 text-center text-sm text-muted-foreground">No document types configured.</div>
-          )}
-        </CardContent>
-      </Card>
+      <Card><CardHeader><CardTitle>Report access by role</CardTitle></CardHeader><CardContent className="divide-y p-0">{(perms.data ?? []).map((p) => <div key={p.role} className="flex items-center justify-between px-4 py-3"><div className="text-sm font-medium">{ROLE_LABELS[p.role]}</div><Switch checked={p.can_view_reports} disabled={p.role === "admin"} onCheckedChange={(v) => togglePerm(p.role, v)} /></div>)}{(perms.data ?? []).length === 0 && <div className="p-6 text-center text-sm text-muted-foreground">No roles configured.</div>}</CardContent></Card>
+      <Card><CardHeader><CardTitle>Document Library access by role</CardTitle></CardHeader><CardContent className="divide-y p-0"><p className="px-4 pb-2 pt-3 text-xs text-muted-foreground">Controls who can browse the Department → Trainer → Document type folder view.</p>{(libraryPerms.data ?? []).map((p) => <div key={p.role} className="flex items-center justify-between px-4 py-3"><div className="text-sm font-medium">{ROLE_LABELS[p.role]}</div><Switch checked={p.can_view_library} disabled={p.role === "admin"} onCheckedChange={(v) => toggleLibraryPerm(p.role, v)} /></div>)}{(libraryPerms.data ?? []).length === 0 && <div className="p-6 text-center text-sm text-muted-foreground">No roles configured.</div>}</CardContent></Card>
+      <Card><CardHeader><CardTitle>Document types</CardTitle></CardHeader><CardContent className="divide-y p-0">{(types.data ?? []).map((t: any) => <div key={t.document_type} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"><div className="min-w-0 flex-1"><div className="text-xs uppercase tracking-wider text-muted-foreground">{DOC_TYPE_LABELS[t.document_type as DocumentType]}</div><Input className="mt-1 max-w-sm" defaultValue={t.label ?? DOC_TYPE_LABELS[t.document_type as DocumentType]} onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== (t.label ?? "")) patchType(t.document_type, { label: v }); }} /></div><div className="flex items-center gap-2 text-sm"><span className="text-muted-foreground">{t.active ? "Available" : "Hidden"}</span><Switch checked={t.active} onCheckedChange={(v) => patchType(t.document_type, { active: v })} /></div></div>)}{(types.data ?? []).length === 0 && <div className="p-6 text-center text-sm text-muted-foreground">No document types configured.</div>}</CardContent></Card>
     </div>
   );
+}
+
+function useStateValue<T>(initial: T): [T, (value: T) => void] {
+  const React = require("react") as typeof import("react");
+  return React.useState(initial);
 }
