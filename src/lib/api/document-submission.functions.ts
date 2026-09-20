@@ -67,12 +67,49 @@ export const submitDocumentForCurrentPeriod = createServerFn({ method: "POST" })
       trainer_id: userId,
       status: "pending_hod" as DocumentStatus,
     }).select().single();
-    if (error) throw new Error(error.message);
+    if (error) {
+      // Do not leave an orphaned upload when the database insert fails.
+      try {
+        await supabase.storage.from("documents").remove([data.file_path]);
+      } catch (cleanupError) {
+        console.error("[document-submission] upload cleanup failed", cleanupError);
+      }
+      throw new Error(error.message);
+    }
 
-    await supabase.from("approval_history").insert({ document_id: doc.id, approver_id: userId, role: "trainer", action: "submitted", comment: `Submitted by ${profile?.full_name ?? "trainer"}` });
-    const hodIds = new Set<string>(await usersWithRole(supabase, "hod", deptId));
-    const { data: deptRow } = await supabase.from("departments").select("hod_id").eq("id", deptId).maybeSingle();
-    if (deptRow?.hod_id) hodIds.add(deptRow.hod_id);
-    await supabase.rpc("notify_users", { _user_ids: Array.from(hodIds), _title: "New submission for review", _message: `"${doc.title}" is awaiting your review.`, _link: `/documents/${doc.id}` });
+    // The document is the source of truth. Audit/history and notifications are
+    // secondary side effects and must not make a successful submission appear failed.
+    try {
+      const { error: historyError } = await supabase.from("approval_history").insert({
+        document_id: doc.id,
+        approver_id: userId,
+        role: "trainer",
+        action: "submitted",
+        comment: `Submitted by ${profile?.full_name ?? "trainer"}`,
+      });
+      if (historyError) console.error("[document-submission] approval history failed", historyError);
+    } catch (historyError) {
+      console.error("[document-submission] approval history failed", historyError);
+    }
+
+    try {
+      const hodIds = new Set<string>(await usersWithRole(supabase, "hod", deptId));
+      const { data: deptRow, error: deptError } = await supabase.from("departments").select("hod_id").eq("id", deptId).maybeSingle();
+      if (deptError) console.error("[document-submission] department lookup failed", deptError);
+
+      if (deptRow?.hod_id) hodIds.add(deptRow.hod_id);
+      if (hodIds.size) {
+        const { error: notificationError } = await supabase.rpc("notify_users", {
+          _user_ids: Array.from(hodIds),
+          _title: "New submission for review",
+          _message: `"${doc.title}" is awaiting your review.`,
+          _link: `/documents/${doc.id}`,
+        });
+        if (notificationError) console.error("[document-submission] notification failed", notificationError);
+      }
+    } catch (notificationError) {
+      console.error("[document-submission] notification failed", notificationError);
+    }
+
     return { id: doc.id, academic_year: period.academic_year, term: period.term };
   });
