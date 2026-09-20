@@ -74,13 +74,54 @@ export const reviewDocument = createServerFn({ method: "POST" }).middleware([req
   else if (doc.status === "pending_iqa" && roles.includes("iqa") && departmentId && doc.department_id === departmentId) { stageRole = "iqa"; nextStatus = data.action === "approve" ? "approved" : "rejected_iqa"; }
   else throw new Error("You cannot review this document at its current stage.");
   const { error: upErr } = await supabase.from("documents").update({ status: nextStatus }).eq("id", doc.id); if (upErr) throw new Error(upErr.message);
-  await supabase.from("approval_history").insert({ document_id: doc.id, approver_id: userId, role: stageRole, action: data.action, comment: data.comment ?? null });
-  await notify(supabase, [doc.trainer_id], data.action === "approve" ? "Your document moved forward" : "Your document was returned", `"${doc.title}" — ${data.action === "approve" ? "approved" : "rejected"} at ${stageRole.toUpperCase()} stage.`, `/documents/${doc.id}`);
-  if (data.action === "approve") {
-    if (nextStatus === "pending_iqa") { const iqaIds = await usersWithRole(supabase, "iqa", doc.department_id ?? null); await notify(supabase, iqaIds, "Document awaiting IQA review", `"${doc.title}" is ready for quality assurance.`, `/documents/${doc.id}`); }
-    else if (nextStatus === "approved") { const [hodIds, dpIds, adminIds] = await Promise.all([usersWithRole(supabase, "hod", doc.department_id ?? null), usersWithRole(supabase, "deputy_principal", null), usersWithRole(supabase, "admin", null)]); await notify(supabase, [...hodIds, ...dpIds, ...adminIds], "Document finally approved", `"${doc.title}" has received final approval.`, `/documents/${doc.id}`); }
+  // The status update above is the approval transaction's source of truth.
+  // History, notifications and audit logging are secondary side effects and
+  // must not make a successful approval/rejection appear to have failed.
+  try {
+    const { error: historyError } = await supabase.from("approval_history").insert({
+      document_id: doc.id,
+      approver_id: userId,
+      role: stageRole,
+      action: data.action,
+      comment: data.comment ?? null,
+    });
+    if (historyError) console.error("[document-review] approval history failed", historyError);
+  } catch (historyError) {
+    console.error("[document-review] approval history failed", historyError);
   }
-  await logAudit(supabase, `document.${data.action}`, { document_id: doc.id, stage: stageRole }); return { ok: true };
+
+  try {
+    await notify(
+      supabase,
+      [doc.trainer_id],
+      data.action === "approve" ? "Your document moved forward" : "Your document was returned",
+      `"${doc.title}" — ${data.action === "approve" ? "approved" : "rejected"} at ${stageRole.toUpperCase()} stage.`,
+      `/documents/${doc.id}`,
+    );
+    if (data.action === "approve") {
+      if (nextStatus === "pending_iqa") {
+        const iqaIds = await usersWithRole(supabase, "iqa", doc.department_id ?? null);
+        await notify(supabase, iqaIds, "Document awaiting IQA review", `"${doc.title}" is ready for quality assurance.`, `/documents/${doc.id}`);
+      } else if (nextStatus === "approved") {
+        const [hodIds, dpIds, adminIds] = await Promise.all([
+          usersWithRole(supabase, "hod", doc.department_id ?? null),
+          usersWithRole(supabase, "deputy_principal", null),
+          usersWithRole(supabase, "admin", null),
+        ]);
+        await notify(supabase, [...hodIds, ...dpIds, ...adminIds], "Document finally approved", `"${doc.title}" has received final approval.`, `/documents/${doc.id}`);
+      }
+    }
+  } catch (notificationError) {
+    console.error("[document-review] notification failed", notificationError);
+  }
+
+  try {
+    await logAudit(supabase, `document.${data.action}`, { document_id: doc.id, stage: stageRole });
+  } catch (auditError) {
+    console.error("[document-review] audit logging failed", auditError);
+  }
+
+  return { ok: true };
 });
 
 export const listDocuments = createServerFn({ method: "GET" }).middleware([requireAppAuth]).inputValidator((d: unknown) => z.object({ include_all_versions: z.boolean().optional() }).partial().parse(d ?? {})).handler(async ({ data, context }) => {
