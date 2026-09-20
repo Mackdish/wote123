@@ -35,6 +35,14 @@ export const setAcademicPeriod = createServerFn({ method: "POST" })
       updated_at: new Date().toISOString(),
     }, { onConflict: "id" });
     if (error) throw new Error(error.message);
-    await supabase.rpc("log_audit", { _action: "admin.academic_period_changed", _details: { academic_year: data.academic_year, term: data.term } });
+    // Audit logging must not make an otherwise successful academic-period update fail.
+    try {
+      await supabase.rpc("log_audit", {
+        _action: "admin.academic_period_changed",
+        _details: { academic_year: data.academic_year, term: data.term },
+      });
+    } catch (auditError) {
+      console.error("[academic-period] audit logging failed", auditError);
+    }
     return { ok: true };
   });
