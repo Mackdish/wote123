@@ -81,7 +81,7 @@ function SubmitPage() {
           <div className="mb-4 rounded-lg border bg-muted/30 p-3 text-sm">
             <div className="font-medium">Current academic period</div>
             <div className="mt-1 text-muted-foreground">
-              {period.isLoading ? "Loading…" : period.data ? `${period.data.academic_year} · ${period.data.term}` : "Not configured by administrator"}
+              {period.isLoading ? "Loading…" : period.error ? "Unable to load the current academic period" : period.data ? `${period.data.academic_year} · ${period.data.term}` : "Not configured by administrator"}
             </div>
           </div>
           <form onSubmit={handle} className="grid gap-4 md:grid-cols-2">
@@ -113,7 +113,7 @@ function SubmitPage() {
             </Field>
             <div className="md:col-span-2 flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => navigate({ to: "/documents" })}>Cancel</Button>
-              <Button type="submit" disabled={loading || !period.data}>
+              <Button type="submit" disabled={loading}>
                 {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
                 Submit for review
               </Button>
