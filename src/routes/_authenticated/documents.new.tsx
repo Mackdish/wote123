@@ -5,7 +5,7 @@ import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { submitDocumentForCurrentPeriod } from "@/lib/api/document-submission.functions";
-import { getAcademicPeriod } from "@/lib/api/academic-period.functions";
+import { getLocalAcademicPeriod } from "@/lib/academic-period";
 import { listDepartments } from "@/lib/api/admin.functions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -28,9 +28,9 @@ function SubmitPage() {
   const { parent } = useSearch({ from: "/_authenticated/documents/new" });
   const submit = useServerFn(submitDocumentForCurrentPeriod);
   const fetchDepts = useServerFn(listDepartments);
-  const fetchPeriod = useServerFn(getAcademicPeriod);
   const depts = useQuery({ queryKey: ["departments"], queryFn: () => fetchDepts() });
-  const period = useQuery({ queryKey: ["academic-period"], queryFn: () => fetchPeriod() });
+  const [period, setPeriod] = useState(getLocalAcademicPeriod());
+  useState(() => { const onChange = () => setPeriod(getLocalAcademicPeriod()); window.addEventListener("wtti-academic-period-changed", onChange); return () => window.removeEventListener("wtti-academic-period-changed", onChange); });
 
   const [form, setForm] = useState({
     description: "", document_type: "scheme_of_work" as DocumentType,
@@ -59,6 +59,7 @@ function SubmitPage() {
         class_name: form.class_name || null, week: form.week || null, session: form.session || null,
         file_path: path, file_name: file.name, mime_type: file.type,
         department_id: form.department_id || null, parent_document_id: parent ?? null,
+        academic_year: period.academic_year, term: period.term,
       } });
       toast.success(parent ? "New version submitted for review" : "Document submitted for review");
       navigate({ to: "/documents/$id", params: { id: res.id } });
@@ -81,7 +82,7 @@ function SubmitPage() {
           <div className="mb-4 rounded-lg border bg-muted/30 p-3 text-sm">
             <div className="font-medium">Current academic period</div>
             <div className="mt-1 text-muted-foreground">
-              {period.isLoading ? "Loading…" : period.error ? "Unable to load the current academic period" : period.data ? `${period.data.academic_year} · ${period.data.term}` : "Not configured by administrator"}
+              {period.academic_year} · {period.term}
             </div>
           </div>
           <form onSubmit={handle} className="grid gap-4 md:grid-cols-2">
