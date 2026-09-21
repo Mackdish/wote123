@@ -182,20 +182,66 @@ function toDataUrl(bytes: Uint8Array, mimeType: string) {
 }
 
 export const downloadLibraryFolder = createServerFn({ method: "POST" }).middleware([requireAppAuth]).inputValidator((d: unknown) => libraryDownloadSchema.parse(d)).handler(async ({ data, context }) => {
-  const { supabase, userId } = context; const { data: canView } = await supabase.rpc("can_view_library", { _user_id: userId }); if (!canView) throw new Error("Forbidden: the Document Library is limited to the Deputy Principal and Administrators.");
-  let q = supabase.from("documents").select("id, title, file_path, file_name, document_type, trainer_id, department_id").order("created_at", { ascending: false }); q = q.eq("department_id", data.department_id); if (data.trainer_id) q = q.eq("trainer_id", data.trainer_id);
-  const stageStatuses = (data.stage ? REVIEW_STAGES[data.stage] : []) ?? []; if (stageStatuses.length) q = q.or(stageStatuses.map((s) => `status.eq.${s}`).join(",")); if (data.status && data.status !== "all") q = q.eq("status", data.status); if (data.type && data.type !== "all") q = q.eq("document_type", data.type); if (data.year && data.year !== "all") q = q.eq("academic_year", data.year); if (data.term && data.term !== "all") q = q.eq("term", data.term);
-  const { data: docs, error } = await q; if (error) throw new Error(error.message); if (!docs?.length) throw new Error("No documents match these filters.");
-  const trainerIds = Array.from(new Set(docs.map((d: any) => d.trainer_id).filter(Boolean))); const deptIds = Array.from(new Set(docs.map((d: any) => d.department_id).filter(Boolean))); const [{ data: trainers }, { data: depts }] = await Promise.all([trainerIds.length ? supabase.from("profiles").select("id, full_name").in("id", trainerIds) : Promise.resolve({ data: [] as any[] }), deptIds.length ? supabase.from("departments").select("id, name").in("id", deptIds) : Promise.resolve({ data: [] as any[] })]); const trainerMap = new Map((trainers ?? []).map((t: any) => [t.id, t.full_name || t.email || "Unknown"])); const deptMap = new Map((depts ?? []).map((d: any) => [d.id, d.name]));
-  const zip = new JSZip(); const CONCURRENCY = 20; let ok = 0; let failed = 0;
-  for (let i = 0; i < docs.length; i += CONCURRENCY) { const batch = docs.slice(i, i + CONCURRENCY); await Promise.all(batch.map(async (d: any) => { try { if (!d.file_path) { console.error("[library-zip] missing file_path", d.id); failed++; return; } const { data: signed, error: signedError } = await supabase.storage.from("documents").createSignedUrl(d.file_path, 60 * 60); if (signedError || !signed?.signedUrl) { console.error("[library-zip] signed URL failed", d.id, d.file_path, signedError); failed++; return; } const res = await fetch(signed.signedUrl); if (!res.ok) { console.error("[library-zip] fetch failed", d.id, d.file_path, res.status); failed++; return; } const fileBuffer = await res.arrayBuffer(); const trainerName = trainerMap.get(d.trainer_id) || "Unknown"; const typeLabel = DOC_TYPE_LABELS[d.document_type as DocumentType] || "Documents"; const safeFileName = (d.file_name || `${d.title}.bin`).replace(/[\/\\?%*:|"<>]/g, "_"); const folderPath = data.trainer_id ? typeLabel : `${trainerName}/${typeLabel}`; zip.folder(folderPath)!.file(safeFileName, fileBuffer, { compression: "STORE" }); ok++; } catch (err) { console.error("[library-zip] failed to add", d.id, err); failed++; } })); }
-  if (!ok) throw new Error(`Could not package any files. ${failed} of ${docs.length} downloads failed.`);
-  const zipBlob = await zip.generateAsync({ type: "blob" }); const zipBytes = new Uint8Array(await zipBlob.arrayBuffer());
-  // Avoid Supabase Storage uploads entirely. The browser already knows how to download data URLs, so the ZIP can be returned directly.
-  // This keeps Library downloads independent of Storage INSERT RLS policies and service-role configuration.
-  const MAX_INLINE_ZIP_BYTES = 12 * 1024 * 1024; if (zipBytes.byteLength > MAX_INLINE_ZIP_BYTES) throw new Error("This Library ZIP is too large for direct download. Please download the documents individually or narrow the filters.");
-  const deptName = deptMap.get(data.department_id) || "department"; const filename = `library-${deptName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${new Date().toISOString().slice(0, 10)}.zip`;
-  return { url: toDataUrl(zipBytes, "application/zip"), doc_count: ok, filename };
+  const { supabase, userId } = context;
+  const { data: canView } = await supabase.rpc("can_view_library", { _user_id: userId });
+  if (!canView) throw new Error("Forbidden: the Document Library is limited to the Deputy Principal and Administrators.");
+
+  let q = supabase.from("documents").select("id, title, file_path, file_name, document_type, trainer_id, department_id, status, academic_year, term").eq("department_id", data.department_id).order("created_at", { ascending: false });
+  if (data.trainer_id) q = q.eq("trainer_id", data.trainer_id);
+  const stageStatuses = (data.stage ? REVIEW_STAGES[data.stage] : []) ?? [];
+  if (stageStatuses.length) q = q.or(stageStatuses.map((s) => `status.eq.${s}`).join(","));
+  if (data.status && data.status !== "all") q = q.eq("status", data.status);
+  if (data.type && data.type !== "all") q = q.eq("document_type", data.type);
+  if (data.year && data.year !== "all") q = q.eq("academic_year", data.year);
+  if (data.term && data.term !== "all") q = q.eq("term", data.term);
+
+  const { data: docs, error } = await q;
+  if (error) throw new Error(error.message);
+  if (!docs?.length) throw new Error("No documents match these filters.");
+
+  const docIds = docs.map((d: any) => d.id);
+  const historyRes = await supabase.from("approval_history")
+    .select("document_id, role, action, approver_id, created_at")
+    .in("document_id", docIds)
+    .eq("action", "approve")
+    .in("role", ["hod", "iqa"]);
+  const history = historyRes.data ?? [];
+  const approverIds = Array.from(new Set(history.map((h: any) => h.approver_id).filter(Boolean)));
+  const approversRes = approverIds.length
+    ? await supabase.from("profiles").select("id, full_name, email").in("id", approverIds)
+    : { data: [] as any[] };
+  const approverMap = new Map((approversRes.data ?? []).map((p: any) => [p.id, p]));
+
+  const items = [];
+  for (const d of docs as any[]) {
+    if (!d.file_path) continue;
+    const { data: signed, error: signedError } = await supabase.storage.from("documents").createSignedUrl(d.file_path, 60 * 60);
+    if (signedError || !signed?.signedUrl) {
+      console.error("[library-stamp] signed URL failed", d.id, d.file_path, signedError);
+      continue;
+    }
+    const stamps = history
+      .filter((h: any) => h.document_id === d.id)
+      .map((h: any) => {
+        const approver: any = approverMap.get(h.approver_id);
+        return { role: h.role, approverName: approver?.full_name || approver?.email || null, date: h.created_at };
+      });
+    items.push({
+      id: d.id,
+      title: d.title,
+      file_name: d.file_name,
+      file_path: d.file_path,
+      document_type: d.document_type,
+      status: d.status,
+      academic_year: d.academic_year,
+      term: d.term,
+      url: signed.signedUrl,
+      stamps,
+    });
+  }
+
+  if (!items.length) throw new Error("Could not prepare any documents for download.");
+  return { items };
 });
 
 export const buildApprovedBundleZip = createServerFn({ method: "POST" }).middleware([requireAppAuth]).inputValidator((d: unknown) => z.object({ department_id: z.string().uuid().nullable().optional(), signature: z.string().min(8).max(64) }).parse(d)).handler(async ({ data, context }) => {
