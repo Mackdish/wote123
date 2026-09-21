@@ -16,6 +16,8 @@ const schema = z.object({
   mime_type: z.string().optional().nullable(),
   department_id: z.string().uuid().optional().nullable(),
   parent_document_id: z.string().uuid().optional().nullable(),
+  academic_year: z.string().trim().min(4).max(20),
+  term: z.string().trim().min(1).max(20),
 });
 
 async function usersWithRole(supabase: any, role: AppRole, departmentId: string | null): Promise<string[]> {
@@ -32,11 +34,7 @@ export const submitDocumentForCurrentPeriod = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => schema.parse(d))
   .handler(async ({ data, context }) => {
     const { supabase, userId } = context;
-    const [{ data: profile }, { data: period }] = await Promise.all([
-      supabase.from("profiles").select("department_id, full_name").eq("id", userId).maybeSingle(),
-      supabase.from("academic_period_settings").select("academic_year, term").eq("id", 1).maybeSingle(),
-    ]);
-    if (!period?.academic_year || !period?.term) throw new Error("The administrator has not configured the current academic year and term.");
+    const { data: profile } = await supabase.from("profiles").select("department_id, full_name").eq("id", userId).maybeSingle();
 
     let deptId = profile?.department_id || data.department_id || null;
     if (data.parent_document_id) {
@@ -55,8 +53,8 @@ export const submitDocumentForCurrentPeriod = createServerFn({ method: "POST" })
       subject: data.subject || null,
       course: data.course || null,
       class_name: data.class_name || null,
-      academic_year: period.academic_year,
-      term: period.term,
+      academic_year: data.academic_year,
+      term: data.term,
       week: data.week || null,
       session: data.session || null,
       file_path: data.file_path,
@@ -111,5 +109,5 @@ export const submitDocumentForCurrentPeriod = createServerFn({ method: "POST" })
       console.error("[document-submission] notification failed", notificationError);
     }
 
-    return { id: doc.id, academic_year: period.academic_year, term: period.term };
+    return { id: doc.id, academic_year: data.academic_year, term: data.term };
   });
