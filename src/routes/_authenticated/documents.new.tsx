@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate, useSearch } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { z } from "zod";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
@@ -30,7 +30,7 @@ function SubmitPage() {
   const fetchDepts = useServerFn(listDepartments);
   const depts = useQuery({ queryKey: ["departments"], queryFn: () => fetchDepts() });
   const [period, setPeriod] = useState(getLocalAcademicPeriod());
-  useState(() => { const onChange = () => setPeriod(getLocalAcademicPeriod()); window.addEventListener("wtti-academic-period-changed", onChange); return () => window.removeEventListener("wtti-academic-period-changed", onChange); });
+  useEffect(() => { const onChange = () => setPeriod(getLocalAcademicPeriod()); window.addEventListener("wtti-academic-period-changed", onChange); return () => window.removeEventListener("wtti-academic-period-changed", onChange); }, []);
 
   const [form, setForm] = useState({
     description: "", document_type: "scheme_of_work" as DocumentType,
