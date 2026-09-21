@@ -16,6 +16,8 @@ import { StatusBadge } from "@/components/status-badge";
 import { DOC_TYPE_LABELS, STATUS_LABELS, type DocumentStatus, type DocumentType } from "@/lib/types";
 import { Building2, ChevronRight, FolderOpen, FileText, User, ArrowLeft, Home, Folder, Download } from "lucide-react";
 import { toast } from "sonner";
+import JSZip from "jszip";
+import { buildStampedPdf } from "@/lib/stamped-pdf";
 
 export const Route = createFileRoute("/_authenticated/library")({
   head: () => ({
@@ -113,19 +115,47 @@ function LibraryPage() {
         year,
         term,
       } });
-      if (result.url) {
-        const res = await fetch(result.url);
-        if (!res.ok) throw new Error(`Download failed: ${res.status}`);
-        const blob = await res.blob();
-        const localUrl = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = localUrl;
-        a.download = result.filename || "library.zip";
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        URL.revokeObjectURL(localUrl);
+      const zip = new JSZip();
+      let added = 0;
+
+      for (const item of result.items ?? []) {
+        const originalName = item.file_name || `${item.title || "document"}.bin`;
+        const lowerName = originalName.toLowerCase();
+        const canStamp = /\\.(pdf|docx|docm)$/.test(lowerName);
+        const stampInputs = (item.stamps ?? []).filter((s: any) => s.role === "hod" || s.role === "iqa");
+
+        if (canStamp && stampInputs.length > 0) {
+          const stamped = await buildStampedPdf({
+            title: item.title,
+            meta: {
+              "Academic Year": item.academic_year || "—",
+              Term: item.term || "—",
+              Status: item.status || "—",
+            },
+            fileUrl: item.url,
+            fileName: originalName,
+            stamps: stampInputs,
+          });
+          const stampedName = originalName.replace(/\\.[^.]+$/, "") + "_stamped.pdf";
+          zip.file(stampedName, stamped);
+        } else {
+          const res = await fetch(item.url);
+          if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+          zip.file(originalName, await res.arrayBuffer());
+        }
+        added++;
       }
+
+      if (!added) throw new Error("No documents could be prepared for download.");
+      const blob = await zip.generateAsync({ type: "blob" });
+      const localUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = localUrl;
+      a.download = `library-${new Date().toISOString().slice(0, 10)}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(localUrl);
     } catch (e: any) {
       toast.error(e?.message ?? "Download failed");
     } finally { setDownloading(false); }
