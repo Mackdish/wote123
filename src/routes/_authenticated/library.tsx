@@ -121,7 +121,7 @@ function LibraryPage() {
       for (const item of result.items ?? []) {
         const originalName = item.file_name || `${item.title || "document"}.bin`;
         const lowerName = originalName.toLowerCase();
-        const canStamp = /\\.(pdf|docx|docm)$/.test(lowerName);
+        const canStamp = lowerName.endsWith(".pdf") || lowerName.endsWith(".docx") || lowerName.endsWith(".docm");
         const stampInputs = (item.stamps ?? []).filter((s: any) => s.role === "hod" || s.role === "iqa");
 
         if (canStamp && stampInputs.length > 0) {
@@ -136,7 +136,7 @@ function LibraryPage() {
             fileName: originalName,
             stamps: stampInputs,
           });
-          const stampedName = originalName.replace(/\\.[^.]+$/, "") + "_stamped.pdf";
+          const stampedName = originalName.replace(/\.[^.]+$/, "") + "_stamped.pdf";
           zip.file(stampedName, stamped);
         } else {
           const res = await fetch(item.url);
