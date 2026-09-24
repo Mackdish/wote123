@@ -156,7 +156,43 @@ export const getApprovedBundle = createServerFn({ method: "GET" }).middleware([r
 });
 
 async function computeBundleSignature(supabase: any, departmentId: string | null): Promise<{ signature: string; doc_count: number; latest: string | null }> {
-  let q = supabase.from("documents").select("id, created_at").eq("status", "approved").order("id", { ascending: true }); if (departmentId) q = q.eq("department_id", departmentId); const { data, error } = await q; if (error) throw new Error(error.message); const rows = (data ?? []) as Array<{ id: string; created_at: string }>; const payload = rows.map((r) => `${r.id}`).join("|"); const bytes = new TextEncoder().encode(payload); const hash = await crypto.subtle.digest("SHA-256", bytes); const signature = Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32); const latest = rows.length ? rows.map((r) => r.created_at).sort().slice(-1)[0] : null; return { signature, doc_count: rows.length, latest };
+  let q = supabase.from("documents").select("id, created_at").eq("status", "approved").order("id", { ascending: true });
+  if (departmentId) q = q.eq("department_id", departmentId);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+
+  const rows = (data ?? []) as Array<{ id: string; created_at: string }>;
+  const docIds = rows.map((r) => r.id);
+  const { data: approvals, error: approvalError } = docIds.length
+    ? await supabase
+        .from("approval_history")
+        .select("document_id, role, action, created_at, approver_id")
+        .in("document_id", docIds)
+        .eq("action", "approve")
+        .in("role", ["hod", "iqa"])
+        .order("created_at", { ascending: true })
+    : { data: [], error: null };
+
+  if (approvalError) console.error("[bundle-signature] approval history lookup failed", approvalError);
+
+  const approvalRows = (approvals ?? []).map((a: any) =>
+    `${a.document_id}|${a.role}|${a.action}|${a.approver_id ?? ""}|${a.created_at ?? ""}`
+  );
+  const payload = [
+    "stamped-v2",
+    ...rows.map((r) => `${r.id}|${r.created_at}`),
+    ...approvalRows,
+  ].join("\n");
+
+  const bytes = new TextEncoder().encode(payload);
+  const hash = await crypto.subtle.digest("SHA-256", bytes);
+  const signature = Array.from(new Uint8Array(hash)).map((b) => b.toString(16).padStart(2, "0")).join("").slice(0, 32);
+  const latestValues = [
+    ...rows.map((r) => r.created_at),
+    ...(approvals ?? []).map((a: any) => a.created_at).filter(Boolean),
+  ];
+  const latest = latestValues.length ? latestValues.sort().slice(-1)[0] : null;
+  return { signature, doc_count: rows.length, latest };
 }
 async function assertBundleRole(supabase: any, userId: string) { const roles = await getRoles(supabase, userId); if (!roles.includes("admin") && !roles.includes("deputy_principal")) throw new Error("Forbidden"); }
 export const getBundleCache = createServerFn({ method: "GET" }).middleware([requireAppAuth]).inputValidator((d: unknown) => z.object({ department_id: z.string().uuid().nullable().optional() }).optional().parse(d)).handler(async ({ data, context }) => {
