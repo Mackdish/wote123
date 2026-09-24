@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useState, useMemo, useEffect } from "react";
-import { getDashboardStats, listDocuments, getBundleCache, buildApprovedBundleZip } from "@/lib/api/documents.functions";
+import { getDashboardStats, listDocuments, getApprovedBundle } from "@/lib/api/documents.functions";
 import { listDepartments } from "@/lib/api/admin.functions";
 import { listNotices } from "@/lib/api/notices.functions";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -13,6 +13,8 @@ import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/status-badge";
 import { DOC_TYPE_LABELS, STATUS_LABELS, ROLE_LABELS, type DocumentStatus, type DocumentType, type AppRole } from "@/lib/types";
 import { FileText, CheckCircle2, Clock, XCircle, Upload, Users, Building2, ScrollText, ShieldCheck, GraduationCap, Crown, Loader2, Download, Megaphone } from "lucide-react";
+import JSZip from "jszip";
+import { buildStampedPdf } from "@/lib/stamped-pdf";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_authenticated/dashboard")({
@@ -267,11 +269,9 @@ function QueueCard({ title, docs, emptyLabel }: { title: string; docs: any[]; em
 
 function ApprovedArchive({ docs }: { docs: any[] }) {
   const fetchDepts = useServerFn(listDepartments);
-  const fetchCache = useServerFn(getBundleCache);
-  const buildZip = useServerFn(buildApprovedBundleZip);
+  const fetchBundle = useServerFn(getApprovedBundle);
   const depts = useQuery({ queryKey: ["departments"], queryFn: () => fetchDepts() });
   const [zipping, setZipping] = useState(false);
-  const [prebuilding, setPrebuilding] = useState(false);
   const [deptFilter, setDeptFilter] = useState<string>("all");
 
   const filteredDocs = useMemo(
@@ -279,25 +279,13 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
     [docs, deptFilter],
   );
 
-  const cacheArg = useMemo(
-    () => (deptFilter === "all" ? {} : { department_id: deptFilter }),
-    [deptFilter],
-  );
-  const cacheKey = ["bundle-cache", deptFilter] as const;
-  const cache = useQuery({
-    queryKey: cacheKey,
-    queryFn: () => fetchCache({ data: cacheArg }),
-    staleTime: 30_000,
-  });
-
-  const cached = cache.data?.cached ?? null;
-  const signature = cache.data?.signature ?? null;
-  const isFresh = !!cached && cached.doc_count === filteredDocs.length;
-
   function triggerBrowserDownload(url: string, filename: string) {
     const a = document.createElement("a");
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); a.remove();
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   function bundleFilename() {
@@ -309,62 +297,68 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
   }
 
   async function downloadZip() {
-    if (zipping) return;
-    if (cached && isFresh) {
-      try {
-        const res = await fetch(cached.url);
-        if (!res.ok) throw new Error(`Cache fetch failed: ${res.status}`);
-        const blob = await res.blob();
-        const localUrl = URL.createObjectURL(blob);
-        triggerBrowserDownload(localUrl, bundleFilename());
-        URL.revokeObjectURL(localUrl);
-        toast.success("Downloaded prebuilt archive");
-        return;
-      } catch (err) {
-        console.warn("[bundle-cache] cache fetch failed, rebuilding", err);
-      }
-    }
-    if (!signature) {
-      toast.error("No bundle signature available");
-      return;
-    }
+    if (zipping || filteredDocs.length === 0) return;
     setZipping(true);
     try {
-      const result = await buildZip({ data: { ...cacheArg, signature } });
-      if (!result.url) throw new Error("Server did not return a download URL");
-      const res = await fetch(result.url);
-      if (!res.ok) throw new Error(`Download failed: ${res.status}`);
-      const blob = await res.blob();
+      // Build the archive in the browser so PDF/DOCX/DOCM files are stamped
+      // before they are added to the ZIP. The previous server-side cache path
+      // copied original files without applying approval stamps.
+      const items = await fetchBundle({ data: deptFilter === "all" ? {} : { department_id: deptFilter } });
+      if (!items?.length) throw new Error("No approved documents are available for this download.");
+
+      const zip = new JSZip();
+      let added = 0;
+
+      for (const item of items as any[]) {
+        const originalName = item.file_name || `${item.title || "document"}.bin`;
+        const lowerName = originalName.toLowerCase();
+        const canStamp = lowerName.endsWith(".pdf") || lowerName.endsWith(".docx") || lowerName.endsWith(".docm");
+        const stamps = (item.stamps ?? []).filter((s: any) => s.role === "hod" || s.role === "iqa");
+        const hasHod = stamps.some((s: any) => s.role === "hod");
+        const hasIqa = stamps.some((s: any) => s.role === "iqa");
+
+        if (canStamp) {
+          if (!hasHod || !hasIqa) {
+            throw new Error(`"${originalName}" is approved but is missing HOD/IQA approval stamp data. Please re-approve the document or check its approval history.`);
+          }
+          const stamped = await buildStampedPdf({
+            title: item.title,
+            meta: {
+              "Academic Year": item.academic_year || "—",
+              Term: item.term || "—",
+              Status: "approved",
+              Department: item.department_name || "—",
+            },
+            fileUrl: item.url,
+            fileName: originalName,
+            stamps,
+          });
+          const stampedName = originalName.replace(/\.[^.]+$/, "") + "_stamped.pdf";
+          zip.folder(item.department_name || "Unassigned")!
+            .folder(DOC_TYPE_LABELS[item.document_type as DocumentType] || "Documents")!
+            .file(stampedName, stamped);
+        } else {
+          const res = await fetch(item.url);
+          if (!res.ok) throw new Error(`Download failed for "${originalName}": ${res.status}`);
+          zip.folder(item.department_name || "Unassigned")!
+            .folder(DOC_TYPE_LABELS[item.document_type as DocumentType] || "Documents")!
+            .file(originalName, await res.arrayBuffer());
+        }
+        added++;
+      }
+
+      if (!added) throw new Error("No documents could be prepared for download.");
+      const blob = await zip.generateAsync({ type: "blob" });
       const localUrl = URL.createObjectURL(blob);
       triggerBrowserDownload(localUrl, bundleFilename());
-      URL.revokeObjectURL(localUrl);
-      toast.success("Archive ready");
+      setTimeout(() => URL.revokeObjectURL(localUrl), 1000);
+      toast.success(`Downloaded ${added} approved document${added === 1 ? "" : "s"} with approval stamps`);
     } catch (e: any) {
-      toast.error(e?.message ?? "Failed to build archive");
-    } finally { setZipping(false); }
+      toast.error(e?.message ?? "Failed to build stamped archive");
+    } finally {
+      setZipping(false);
+    }
   }
-
-  const [prebuiltFor, setPrebuiltFor] = useState<string | null>(null);
-  useEffect(() => {
-    if (cache.isLoading) return;
-    if (!signature || filteredDocs.length === 0) return;
-    if (isFresh) return;
-    if (prebuilding || zipping) return;
-    if (prebuiltFor === signature) return;
-    setPrebuilding(true);
-    setPrebuiltFor(signature);
-    (async () => {
-      try { await buildZip({ data: { ...cacheArg, signature } }); } catch (err) { console.warn("[bundle-cache] prebuild failed", err); }
-      finally { setPrebuilding(false); }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature, isFresh, filteredDocs.length, cache.isLoading]);
-
-  const buttonLabel = isFresh
-    ? `Download cached ZIP (${filteredDocs.length})`
-    : prebuilding
-      ? `Preparing… (${filteredDocs.length})`
-      : `Download ZIP (${filteredDocs.length})`;
 
   return (
     <Card>
@@ -372,11 +366,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
         <div>
           <CardTitle className="text-base">Approved & Final Documents</CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">
-            View-only archive — filter by department, download all as a zipped folder.
-            {isFresh && cached && (
-              <span className="ml-1 text-success">Prebuilt {new Date(cached.created_at).toLocaleString()} · {(cached.size_bytes / 1024 / 1024).toFixed(1)} MB</span>
-            )}
-            {!isFresh && prebuilding && <span className="ml-1">Building cached archive in background…</span>}
+            View-only archive — filter by department, download all as a zipped folder. Approved PDF/DOCX/DOCM files are stamped with both HOD and IQA approvals.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -391,7 +381,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
           </Select>
           <Button onClick={downloadZip} disabled={zipping || filteredDocs.length === 0}>
             {zipping ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-            {buttonLabel}
+            {zipping ? `Preparing… (${filteredDocs.length})` : `Download ZIP (${filteredDocs.length})`}
           </Button>
         </div>
       </CardHeader>
@@ -415,7 +405,6 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
     </Card>
   );
 }
-
 function NoticesPanel({ visibleToTrainerOnly: _v }: { visibleToTrainerOnly: boolean }) {
   const fetchNotices = useServerFn(listNotices);
   const q = useQuery({ queryKey: ["notices"], queryFn: () => fetchNotices() });
