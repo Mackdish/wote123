@@ -309,7 +309,9 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
       const zip = new JSZip();
       let added = 0;
 
-      for (const item of items as any[]) {
+      const STAMP_CONCURRENCY = 3;
+      const stampQueue = [...(items as any[])];
+      async function processItem(item: any) {
         const originalName = item.file_name || `${item.title || "document"}.bin`;
         const lowerName = originalName.toLowerCase();
         const canStamp = lowerName.endsWith(".pdf") || lowerName.endsWith(".docx") || lowerName.endsWith(".docm");
@@ -319,7 +321,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
 
         if (canStamp) {
           if (!hasHod || !hasIqa) {
-            throw new Error(`"${originalName}" is approved but is missing HOD/IQA approval stamp data. Please re-approve the document or check its approval history.`);
+            throw new Error(`"${originalName}" is approved but is missing HOD/IQA approval stamp data.`);
           }
           const stamped = await buildStampedPdf({
             title: item.title,
@@ -338,13 +340,23 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
             .folder(DOC_TYPE_LABELS[item.document_type as DocumentType] || "Documents")!
             .file(stampedName, stamped);
         } else {
-          const res = await fetch(item.url);
+          // Unsupported source formats cannot be stamped safely; keep the original.
+          const res = await fetch(item.url, { cache: "no-store" });
           if (!res.ok) throw new Error(`Download failed for "${originalName}": ${res.status}`);
           zip.folder(item.department_name || "Unassigned")!
             .folder(DOC_TYPE_LABELS[item.document_type as DocumentType] || "Documents")!
             .file(originalName, await res.arrayBuffer());
         }
-        added++;
+        return originalName;
+      }
+
+      // Render a few documents at once instead of processing the entire archive
+      // serially. This substantially reduces wait time while avoiding excessive
+      // browser memory use from rendering many DOCX files simultaneously.
+      while (stampQueue.length) {
+        const batch = stampQueue.splice(0, STAMP_CONCURRENCY);
+        await Promise.all(batch.map(processItem));
+        added += batch.length;
       }
 
       if (!added) throw new Error("No documents could be prepared for download.");
