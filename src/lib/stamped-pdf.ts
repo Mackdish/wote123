@@ -76,9 +76,9 @@ async function renderDocxIntoPdf(
       const rect = section.getBoundingClientRect();
       const dataUrl = await toPng(section, {
         backgroundColor: "#ffffff",
-        pixelRatio: 2,
+        pixelRatio: 1.5,
         cacheBust: true,
-        width: rect.width,
+        width: Math.min(rect.width, 1000),
         height: rect.height,
         skipFonts: false,
       });
@@ -144,8 +144,21 @@ export async function buildStampedPdf(opts: {
     const lowerFileName = (opts.fileName || "").toLowerCase();
     const expectsOriginalDocument = /\.(pdf|docx|docm)$/.test(lowerFileName);
     try {
-      const res = await fetch(opts.fileUrl);
-      if (!res.ok) throw new Error("Could not load the original attachment");
+      let res: Response | null = null;
+      let lastFetchError: unknown = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          res = await fetch(opts.fileUrl, { cache: "no-store" });
+          if (res.ok) break;
+          lastFetchError = new Error(`HTTP ${res.status}`);
+        } catch (fetchError) {
+          lastFetchError = fetchError;
+        }
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 700));
+      }
+      if (!res?.ok) {
+        throw new Error(`Could not load the original attachment after 3 attempts: ${lastFetchError instanceof Error ? lastFetchError.message : "network error"}`);
+      }
       const buf = await res.arrayBuffer();
       const ct = res.headers.get("content-type") || "";
       const looksPdf = ct.includes("pdf") || lowerFileName.endsWith(".pdf");
