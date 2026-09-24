@@ -325,7 +325,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
       const zip = new JSZip();
       let added = 0;
 
-      const STAMP_CONCURRENCY = 3;
+      const STAMP_CONCURRENCY = 2;
       const stampQueue = [...(items as any[])];
       async function processItem(item: any) {
         const originalName = item.file_name || `${item.title || "document"}.bin`;
@@ -371,8 +371,15 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
       // browser memory use from rendering many DOCX files simultaneously.
       while (stampQueue.length) {
         const batch = stampQueue.splice(0, STAMP_CONCURRENCY);
-        await Promise.all(batch.map(processItem));
-        added += batch.length;
+        try {
+          await Promise.all(batch.map(processItem));
+          added += batch.length;
+        } catch (error: any) {
+          const message = error?.message ?? String(error);
+          throw new Error(
+            `The approved archive could not be completed. ${message}. Try downloading the affected document individually to identify the source file.`
+          );
+        }
       }
 
       if (!added) throw new Error("No documents could be prepared for download.");
