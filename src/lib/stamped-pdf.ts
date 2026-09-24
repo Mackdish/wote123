@@ -19,9 +19,14 @@ const STAMP_URL: Record<StampInput["role"], string> = {
   iqa: iqaStampUrl,
 };
 
+const stampBytesCache: Partial<Record<StampInput["role"], Promise<ArrayBuffer>>> = {};
+
 async function loadStampImage(pdf: PDFDocument, role: StampInput["role"]): Promise<PDFImage> {
-  const res = await fetch(STAMP_URL[role]);
-  const bytes = await res.arrayBuffer();
+  stampBytesCache[role] ??= fetch(STAMP_URL[role], { cache: "force-cache" }).then(async (res) => {
+    if (!res.ok) throw new Error(`Could not load ${role.toUpperCase()} approval stamp image: HTTP ${res.status}`);
+    return res.arrayBuffer();
+  });
+  const bytes = await stampBytesCache[role]!;
   return pdf.embedPng(bytes);
 }
 
@@ -147,14 +152,20 @@ export async function buildStampedPdf(opts: {
       let res: Response | null = null;
       let lastFetchError: unknown = null;
       for (let attempt = 1; attempt <= 3; attempt++) {
+        const controller = new AbortController();
+        const timeout = window.setTimeout(() => controller.abort(), 30000);
         try {
-          res = await fetch(opts.fileUrl, { cache: "no-store" });
+          res = await fetch(opts.fileUrl, { cache: "no-store", signal: controller.signal });
           if (res.ok) break;
           lastFetchError = new Error(`HTTP ${res.status}`);
+          // Do not retry permanent storage/auth errors.
+          if (res.status >= 400 && res.status < 500) break;
         } catch (fetchError) {
           lastFetchError = fetchError;
+        } finally {
+          window.clearTimeout(timeout);
         }
-        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 700));
+        if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, attempt * 500));
       }
       if (!res?.ok) {
         throw new Error(`Could not load the original attachment after 3 attempts: ${lastFetchError instanceof Error ? lastFetchError.message : "network error"}`);
@@ -168,7 +179,7 @@ export async function buildStampedPdf(opts: {
         lowerFileName.endsWith(".docm");
 
       if (looksPdf) {
-        pdf = await PDFDocument.load(buf);
+        pdf = await PDFDocument.load(buf, { ignoreEncryption: true });
         hasOriginalContent = true;
       } else if (looksDocx) {
         pdf = await PDFDocument.create();
@@ -182,7 +193,7 @@ export async function buildStampedPdf(opts: {
       console.error("[stamped-pdf] failed to load original", err);
       if (expectsOriginalDocument) {
         const detail = err instanceof Error ? err.message : String(err);
-        throw new Error(`Could not stamp the original document: ${detail}`);
+        throw new Error(`Could not stamp "${opts.fileName || opts.title}" after loading the original: ${detail}`);
       }
       pdf = await PDFDocument.create();
     }
