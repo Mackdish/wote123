@@ -46,8 +46,11 @@ function scopeKey(departmentId) {
 
 async function computeSignature(docs, approvals) {
   const payload = [
-    "stamped-v2",
-    ...docs.map((d) => `${d.id}|${d.created_at}`),
+    "stamped-v3",
+    ...docs.map((d) => [
+      d.id, d.created_at, d.title ?? "", d.file_path ?? "", d.file_name ?? "",
+      d.document_type ?? "", d.academic_year ?? "", d.term ?? "", d.department_id ?? "",
+    ].join("|")),
     ...approvals.map((a) => `${a.document_id}|${a.role}|${a.action}|${a.approver_id ?? ""}|${a.created_at ?? ""}`),
   ].join("\n");
   return createHash("sha256").update(payload).digest("hex").slice(0, 32);
