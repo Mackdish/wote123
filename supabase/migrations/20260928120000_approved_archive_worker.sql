@@ -25,6 +25,18 @@ create policy "Archive managers can read preparation status"
     where ur.user_id = auth.uid() and ur.role in ('admin', 'deputy_principal')
   ));
 
+drop policy if exists "Archive managers can retry preparation" on public.approved_archive_jobs;
+create policy "Archive managers can retry preparation"
+  on public.approved_archive_jobs for update to authenticated
+  using (exists (
+    select 1 from public.user_roles ur
+    where ur.user_id = auth.uid() and ur.role in ('admin', 'deputy_principal')
+  ))
+  with check (exists (
+    select 1 from public.user_roles ur
+    where ur.user_id = auth.uid() and ur.role in ('admin', 'deputy_principal')
+  ));
+
 drop policy if exists "Archive managers can queue preparation" on public.approved_archive_jobs;
 create policy "Archive managers can queue preparation"
   on public.approved_archive_jobs for insert to authenticated
@@ -71,9 +83,16 @@ begin
     return old;
   end if;
 
+  if TG_OP = 'INSERT' then
+    if new.status = 'approved' then
+      perform public.enqueue_approved_archive_scope(null);
+      if new.department_id is not null then perform public.enqueue_approved_archive_scope(new.department_id); end if;
+    end if;
+    return new;
+  end if;
+
   if new.status = 'approved' and (
-    TG_OP = 'INSERT'
-    or old.status is distinct from new.status
+    old.status is distinct from new.status
     or old.file_path is distinct from new.file_path
     or old.file_name is distinct from new.file_name
     or old.department_id is distinct from new.department_id
@@ -84,7 +103,7 @@ begin
     if new.department_id is not null then perform public.enqueue_approved_archive_scope(new.department_id); end if;
   end if;
 
-  if TG_OP = 'UPDATE' and old.status = 'approved' and new.status is distinct from 'approved' then
+  if old.status = 'approved' and new.status is distinct from 'approved' then
     perform public.enqueue_approved_archive_scope(null);
     if old.department_id is not null then perform public.enqueue_approved_archive_scope(old.department_id); end if;
   end if;
