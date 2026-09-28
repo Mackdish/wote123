@@ -211,6 +211,7 @@ export const getBundleCache = createServerFn({ method: "GET" }).middleware([requ
   let cacheQuery = supabase.from("bundle_cache").select("*")
     .eq("signature", signature)
     .like("storage_path", "_stamped_bundles/%")
+    .order("created_at", { ascending: false })
     .limit(1);
   cacheQuery = departmentId ? cacheQuery.eq("department_id", departmentId) : cacheQuery.is("department_id", null);
   const { data: rows, error: cacheError } = await cacheQuery;
