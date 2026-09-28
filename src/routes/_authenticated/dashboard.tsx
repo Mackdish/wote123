@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useState, useMemo } from "react";
-import { getDashboardStats, listDocuments, getBundleCache, requestApprovedArchive } from "@/lib/api/documents.functions";
+import { getDashboardStats, listDocuments, getBundleCache, buildApprovedBundleZip } from "@/lib/api/documents.functions";
 import { listDepartments } from "@/lib/api/admin.functions";
 import { listNotices } from "@/lib/api/notices.functions";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -268,7 +268,7 @@ function QueueCard({ title, docs, emptyLabel }: { title: string; docs: any[]; em
 function ApprovedArchive({ docs }: { docs: any[] }) {
   const fetchDepts = useServerFn(listDepartments);
   const fetchBundleCache = useServerFn(getBundleCache);
-  const requestArchive = useServerFn(requestApprovedArchive);
+  const buildArchive = useServerFn(buildApprovedBundleZip);
   const depts = useQuery({ queryKey: ["departments"], queryFn: () => fetchDepts() });
   const [deptFilter, setDeptFilter] = useState<string>("all");
   const [requesting, setRequesting] = useState(false);
@@ -319,15 +319,18 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
         return;
       }
 
-      const result = await requestArchive({
-        data: deptFilter === "all" ? {} : { department_id: deptFilter },
+      const signature = current.data?.signature;
+      if (!signature) throw new Error("Could not determine the archive version. Please try again.");
+      const result = await buildArchive({
+        data: {
+          ...(deptFilter === "all" ? {} : { department_id: deptFilter }),
+          signature,
+        },
       });
+      if (!result.url) throw new Error("The ZIP was prepared but a download link could not be created.");
+      triggerBrowserDownload(result.url, bundleFilename());
+      toast.success(`Downloading ZIP (${result.doc_count} documents)`);
       await cacheQuery.refetch();
-      if (result.status === "queued" || result.status === "processing") {
-        toast.info("Your approved archive is being prepared in the background. This button will download it as soon as it is ready.");
-      } else {
-        toast.info("Archive preparation has been requested.");
-      }
     } catch (error: any) {
       toast.error(error?.message ?? "Could not request the approved archive.");
     } finally {
@@ -336,10 +339,10 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
   }
 
   const cacheInfo = cacheQuery.data;
-  const preparing = cacheInfo?.job_status === "queued" || cacheInfo?.job_status === "processing";
-  const failed = cacheInfo?.job_status === "failed";
-  const jobAgeMs = cacheInfo?.job_updated_at ? Date.now() - new Date(cacheInfo.job_updated_at).getTime() : 0;
-  const stalled = preparing && Number.isFinite(jobAgeMs) && jobAgeMs > 5 * 60 * 1000;
+  const preparing = false;
+  const failed = false;
+  const jobAgeMs = 0;
+  const stalled = false;
   const ready = Boolean(cacheInfo?.cached?.url && cacheInfo.cached.stamped);
   const buttonLabel = ready
     ? `Download ZIP (${cacheInfo?.cached?.doc_count ?? filteredDocs.length})`
@@ -357,17 +360,17 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
         <div>
           <CardTitle className="text-base">Approved & Final Documents</CardTitle>
           <p className="mt-1 text-xs text-muted-foreground">
-            View-only archive — filter by department and download a ZIP. Approved PDF/DOCX/DOCM files are stamped with both HOD and IQA approvals. Archives are prepared in the background.
+            View-only archive — filter by department and download approved documents as a ZIP.
           </p>
           {preparing && (
-            <p className="mt-2 text-xs text-muted-foreground">The archive is being prepared on the server. You can leave this page; the finished ZIP will be available here.</p>
+            <p className="mt-2 text-xs text-muted-foreground">Archive preparation runs when you request a download.</p>
           )}
           {failed && cacheInfo?.job_error && (
-            <p className="mt-2 text-xs text-destructive">Archive preparation failed. Retry to queue it again.</p>
+            <p className="mt-2 text-xs text-destructive">Archive preparation failed. Try again.</p>
           )}
           {stalled && (
             <p className="mt-2 text-xs text-destructive">
-              The archive worker has not updated this job for over 5 minutes. Check that the background worker is running; you can request preparation again.
+              The archive is taking longer than expected. You can try again.
             </p>
           )}
         </div>
