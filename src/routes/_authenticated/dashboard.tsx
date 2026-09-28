@@ -338,14 +338,18 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
   const cacheInfo = cacheQuery.data;
   const preparing = cacheInfo?.job_status === "queued" || cacheInfo?.job_status === "processing";
   const failed = cacheInfo?.job_status === "failed";
+  const jobAgeMs = cacheInfo?.job_updated_at ? Date.now() - new Date(cacheInfo.job_updated_at).getTime() : 0;
+  const stalled = preparing && Number.isFinite(jobAgeMs) && jobAgeMs > 5 * 60 * 1000;
   const ready = Boolean(cacheInfo?.cached?.url && cacheInfo.cached.stamped);
   const buttonLabel = ready
     ? `Download ZIP (${cacheInfo?.cached?.doc_count ?? filteredDocs.length})`
-    : preparing
-      ? "Preparing archive…"
-      : failed
-        ? "Retry archive preparation"
-        : `Prepare ZIP (${filteredDocs.length})`;
+    : stalled
+      ? "Archive taking too long"
+      : preparing
+        ? "Preparing archive…"
+        : failed
+          ? "Retry archive preparation"
+          : `Prepare ZIP (${filteredDocs.length})`;
 
   return (
     <Card>
@@ -360,6 +364,11 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
           )}
           {failed && cacheInfo?.job_error && (
             <p className="mt-2 text-xs text-destructive">Archive preparation failed. Retry to queue it again.</p>
+          )}
+          {stalled && (
+            <p className="mt-2 text-xs text-destructive">
+              The archive worker has not updated this job for over 5 minutes. Check that the background worker is running; you can request preparation again.
+            </p>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
