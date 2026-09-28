@@ -224,7 +224,10 @@ async function buildArchive(job) {
   const departmentId = job.department_id ?? null;
   const { docs, departments, stamps, signature } = await loadArchiveData(departmentId);
   if (!docs.length) {
-    await supabase.from("bundle_cache").delete().is("department_id", departmentId);
+    let emptyCacheQuery = supabase.from("bundle_cache").delete();
+    emptyCacheQuery = departmentId ? emptyCacheQuery.eq("department_id", departmentId) : emptyCacheQuery.is("department_id", null);
+    const { error: emptyCacheError } = await emptyCacheQuery;
+    if (emptyCacheError) throw emptyCacheError;
     return { empty: true, signature, count: 0, size: 0 };
   }
 
@@ -272,18 +275,19 @@ async function buildArchive(job) {
   if (adminError) throw adminError;
   if (!adminRole?.user_id) throw new Error("No administrator account is available to own the archive cache record.");
 
-  let oldQuery = supabase.from("bundle_cache").select("id,storage_path").eq("department_id", departmentId);
-  if (departmentId === null) oldQuery = supabase.from("bundle_cache").select("id,storage_path").is("department_id", null);
+  let oldQuery = supabase.from("bundle_cache").select("id,storage_path");
+  oldQuery = departmentId ? oldQuery.eq("department_id", departmentId) : oldQuery.is("department_id", null);
   const { data: oldRows, error: oldError } = await oldQuery;
   if (oldError) throw oldError;
   const oldPaths = (oldRows ?? []).map((r) => r.storage_path).filter((p) => p && p !== storagePath);
-  if (oldPaths.length) await supabase.storage.from("documents").remove(oldPaths);
-  const { error: deleteError } = await supabase.from("bundle_cache").delete().eq("department_id", departmentId);
-  if (deleteError && departmentId !== null) throw deleteError;
-  if (departmentId === null) {
-    const { error } = await supabase.from("bundle_cache").delete().is("department_id", null);
-    if (error) throw error;
+  if (oldPaths.length) {
+    const { error: removeError } = await supabase.storage.from("documents").remove(oldPaths);
+    if (removeError) console.warn("[archive-worker] could not remove stale ZIP objects", removeError.message);
   }
+  let deleteQuery = supabase.from("bundle_cache").delete();
+  deleteQuery = departmentId ? deleteQuery.eq("department_id", departmentId) : deleteQuery.is("department_id", null);
+  const { error: deleteError } = await deleteQuery;
+  if (deleteError) throw deleteError;
   const { error: insertError } = await supabase.from("bundle_cache").insert({
     department_id: departmentId,
     signature,
@@ -314,6 +318,18 @@ async function runOnce() {
   console.log(`[archive-worker] processing ${job.scope_key} (attempt ${job.attempts})`);
   try {
     const result = await buildArchive(job);
+    const latest = await loadArchiveData(job.department_id ?? null);
+    if (latest.signature !== result.signature) {
+      await supabase.from("approved_archive_jobs").update({
+        status: "queued",
+        last_error: null,
+        updated_at: new Date().toISOString(),
+        claimed_at: null,
+        finished_at: null,
+      }).eq("id", job.id);
+      console.log(`[archive-worker] ${job.scope_key} changed during preparation; queued another build`);
+      return true;
+    }
     await markJob(job.id, "ready");
     console.log(`[archive-worker] ready ${job.scope_key}: ${result.count} documents, ${result.size} bytes`);
   } catch (error) {
