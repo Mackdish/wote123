@@ -156,7 +156,10 @@ export const getApprovedBundle = createServerFn({ method: "GET" }).middleware([r
 });
 
 async function computeBundleSignature(supabase: any, departmentId: string | null): Promise<{ signature: string; doc_count: number; latest: string | null }> {
-  let q = supabase.from("documents").select("id, created_at").eq("status", "approved").order("id", { ascending: true });
+  let q = supabase.from("documents")
+    .select("id, created_at, title, file_path, file_name, document_type, academic_year, term, department_id")
+    .eq("status", "approved")
+    .order("id", { ascending: true });
   if (departmentId) q = q.eq("department_id", departmentId);
   const { data, error } = await q;
   if (error) throw new Error(error.message);
@@ -179,8 +182,11 @@ async function computeBundleSignature(supabase: any, departmentId: string | null
     `${a.document_id}|${a.role}|${a.action}|${a.approver_id ?? ""}|${a.created_at ?? ""}`
   );
   const payload = [
-    "stamped-v2",
-    ...rows.map((r) => `${r.id}|${r.created_at}`),
+    "stamped-v3",
+    ...rows.map((r: any) => [
+      r.id, r.created_at, r.title ?? "", r.file_path ?? "", r.file_name ?? "",
+      r.document_type ?? "", r.academic_year ?? "", r.term ?? "", r.department_id ?? "",
+    ].join("|")),
     ...approvalRows,
   ].join("\n");
 
