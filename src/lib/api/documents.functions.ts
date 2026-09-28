@@ -252,7 +252,7 @@ export const requestApprovedArchive = createServerFn({ method: "POST" })
   .middleware([requireAppAuth])
   .inputValidator((d: unknown) => z.object({ department_id: z.string().uuid().nullable().optional() }).optional().parse(d))
   .handler(async ({ data, context }) => {
-    const { supabase, userId } = context;
+    const { supabase } = context;
     await assertBundleRole(supabase, userId);
     const departmentId = data?.department_id ?? null;
     const scopeKey = departmentId ? `department:${departmentId}` : "all";
