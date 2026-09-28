@@ -205,12 +205,11 @@ export const getBundleCache = createServerFn({ method: "GET" }).middleware([requ
   const { supabase, userId } = context;
   await assertBundleRole(supabase, userId);
   const departmentId = data?.department_id ?? null;
-  const scopeKey = departmentId ? `department:${departmentId}` : "all";
   const { signature, doc_count } = await computeBundleSignature(supabase, departmentId);
 
   let cacheQuery = supabase.from("bundle_cache").select("*")
     .eq("signature", signature)
-    .like("storage_path", "_stamped_bundles/%")
+    .or("storage_path.like._stamped_bundles/%,storage_path.like._bundles/%")
     .order("created_at", { ascending: false })
     .limit(1);
   cacheQuery = departmentId ? cacheQuery.eq("department_id", departmentId) : cacheQuery.is("department_id", null);
@@ -228,7 +227,7 @@ export const getBundleCache = createServerFn({ method: "GET" }).middleware([requ
         created_at: row.created_at,
         size_bytes: row.size_bytes,
         doc_count: row.doc_count,
-        stamped: true,
+        stamped: row.storage_path.startsWith("_stamped_bundles/"),
       };
     }
   }
