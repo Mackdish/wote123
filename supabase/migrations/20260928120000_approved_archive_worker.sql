@@ -98,6 +98,8 @@ begin
     or old.department_id is distinct from new.department_id
     or old.title is distinct from new.title
     or old.document_type is distinct from new.document_type
+    or old.academic_year is distinct from new.academic_year
+    or old.term is distinct from new.term
   ) then
     perform public.enqueue_approved_archive_scope(null);
     if new.department_id is not null then perform public.enqueue_approved_archive_scope(new.department_id); end if;
@@ -152,6 +154,7 @@ as $$
     select id
     from public.approved_archive_jobs
     where status = 'queued'
+       or (status = 'processing' and claimed_at < now() - interval '20 minutes')
     order by created_at asc
     for update skip locked
     limit greatest(1, least(coalesce(p_limit, 1), 10))
