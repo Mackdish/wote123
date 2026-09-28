@@ -258,13 +258,19 @@ export const requestApprovedArchive = createServerFn({ method: "POST" })
     const scopeKey = departmentId ? `department:${departmentId}` : "all";
     const { signature, doc_count } = await computeBundleSignature(supabase, departmentId);
 
-    let existingQuery = supabase.from("approved_archive_jobs").select("id,status")
+    let existingQuery = supabase.from("approved_archive_jobs").select("id,status,updated_at")
       .eq("scope_key", scopeKey).limit(1);
     const { data: existingRows, error: existingError } = await existingQuery;
     if (existingError) throw new Error(existingError.message);
     const existing = existingRows?.[0] ?? null;
-    if (existing && (existing.status === "queued" || existing.status === "processing")) {
+    if (existing && existing.status === "processing") {
       return { status: existing.status, signature, doc_count };
+    }
+    if (existing && existing.status === "queued") {
+      const ageMs = Date.now() - new Date(existing.updated_at).getTime();
+      if (Number.isFinite(ageMs) && ageMs < 5 * 60 * 1000) {
+        return { status: existing.status, signature, doc_count };
+      }
     }
 
     const jobPayload = {
