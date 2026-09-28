@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { getDashboardStats, listDocuments, getApprovedBundle, getBundleCache, createBundleUploadUrl, finalizeBundleCache } from "@/lib/api/documents.functions";
 import { listDepartments } from "@/lib/api/admin.functions";
 import { listNotices } from "@/lib/api/notices.functions";
@@ -278,6 +278,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
   const [zipping, setZipping] = useState(false);
   const [zipStage, setZipStage] = useState("Preparing");
   const [deptFilter, setDeptFilter] = useState<string>("all");
+  const backgroundPrepKeys = useRef(new Set<string>());
 
   const filteredDocs = useMemo(
     () => deptFilter === "all" ? docs : docs.filter((d: any) => d.department_id === deptFilter),
@@ -301,10 +302,10 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
     return `approved-${deptSlug}-${new Date().toISOString().slice(0, 10)}.zip`;
   }
 
-  async function downloadZip() {
+  async function downloadZip(background = false) {
     if (zipping || filteredDocs.length === 0) return;
     setZipping(true);
-    setZipStage("Checking archive");
+    setZipStage(background ? "Preparing archive in background" : "Checking archive");
     try {
       // Ask the server for the current bundle signature. We intentionally use
       // a browser cache for stamped archives because the old server cache may
@@ -314,6 +315,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
       // Only reuse archives uploaded by this stamped pipeline. Older server-side
       // ZIPs may contain unstamped originals and must not be served here.
       if (cacheInfo.cached?.stamped && cacheInfo.cached.url) {
+        if (background) return;
         const downloadUrl = new URL(cacheInfo.cached.url);
         downloadUrl.searchParams.set("download", bundleFilename());
         triggerBrowserDownload(downloadUrl.toString(), bundleFilename());
@@ -324,6 +326,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
         const cache = await caches.open("wtti-approved-stamped-v2");
         const cached = await cache.match(browserCacheKey);
         if (cached) {
+          if (background) return;
           const cachedBlob = await cached.blob();
           const localUrl = URL.createObjectURL(cachedBlob);
           triggerBrowserDownload(localUrl, bundleFilename());
@@ -449,6 +452,11 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
         console.warn("[approved-archive] remote stamped cache unavailable", cacheError);
       }
 
+      if (background) {
+        // Archive is now ready in Storage; the next user click downloads it directly.
+        return;
+      }
+
       if (remoteDownloadUrl) {
         const downloadUrl = new URL(remoteDownloadUrl);
         downloadUrl.searchParams.set("download", bundleFilename());
@@ -466,6 +474,14 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
       setZipStage("Preparing");
     }
   }
+
+  useEffect(() => {
+    if (!filteredDocs.length) return;
+    const prepKey = `${deptFilter}:${filteredDocs.map((d: any) => d.id).sort().join(",")}`;
+    if (backgroundPrepKeys.current.has(prepKey)) return;
+    backgroundPrepKeys.current.add(prepKey);
+    void downloadZip(true);
+  }, [deptFilter, filteredDocs]);
 
   return (
     <Card>
