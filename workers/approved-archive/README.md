@@ -8,7 +8,7 @@ Apply `supabase/migrations/20260928120000_approved_archive_worker.sql` to the co
 
 ## Deploy with Docker Compose
 
-From the repository root, create `workers/approved-archive/.env` (do not commit it):
+From the repository root, copy `workers/approved-archive/.env.example` to `workers/approved-archive/.env`, then fill in the real values (do not commit it):
 
 ```dotenv
 SUPABASE_URL=https://YOUR_PROJECT.supabase.co
