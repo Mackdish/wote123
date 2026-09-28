@@ -196,14 +196,87 @@ async function computeBundleSignature(supabase: any, departmentId: string | null
 }
 async function assertBundleRole(supabase: any, userId: string) { const roles = await getRoles(supabase, userId); if (!roles.includes("admin") && !roles.includes("deputy_principal")) throw new Error("Forbidden"); }
 export const getBundleCache = createServerFn({ method: "GET" }).middleware([requireAppAuth]).inputValidator((d: unknown) => z.object({ department_id: z.string().uuid().nullable().optional() }).optional().parse(d)).handler(async ({ data, context }) => {
-  const { supabase, userId } = context; await assertBundleRole(supabase, userId); const departmentId = data?.department_id ?? null; const { signature, doc_count } = await computeBundleSignature(supabase, departmentId); let q = supabase.from("bundle_cache").select("*").eq("signature", signature).limit(1); q = departmentId ? q.eq("department_id", departmentId) : q.is("department_id", null); const { data: rows } = await q; const row: any = rows?.[0] ?? null; let cached: { url: string; created_at: string; size_bytes: number; doc_count: number; stamped: boolean } | null = null; if (row) { const { data: signed } = await supabase.storage.from("documents").createSignedUrl(row.storage_path, 60 * 60); if (signed?.signedUrl) cached = { url: signed.signedUrl, created_at: row.created_at, size_bytes: row.size_bytes, doc_count: row.doc_count, stamped: String(row.storage_path ?? "").startsWith("_stamped_bundles/") }; } return { signature, doc_count, cached };
+  const { supabase, userId } = context;
+  await assertBundleRole(supabase, userId);
+  const departmentId = data?.department_id ?? null;
+  const scopeKey = departmentId ? `department:${departmentId}` : "all";
+  const { signature, doc_count } = await computeBundleSignature(supabase, departmentId);
+
+  let cacheQuery = supabase.from("bundle_cache").select("*")
+    .eq("signature", signature)
+    .like("storage_path", "_stamped_bundles/%")
+    .limit(1);
+  cacheQuery = departmentId ? cacheQuery.eq("department_id", departmentId) : cacheQuery.is("department_id", null);
+  const { data: rows, error: cacheError } = await cacheQuery;
+  if (cacheError) throw new Error(cacheError.message);
+  const row: any = rows?.[0] ?? null;
+
+  let cached: { url: string; created_at: string; size_bytes: number; doc_count: number; stamped: boolean } | null = null;
+  if (row?.storage_path) {
+    const { data: signed, error } = await supabase.storage.from("documents")
+      .createSignedUrl(row.storage_path, 60 * 60);
+    if (!error && signed?.signedUrl) {
+      cached = {
+        url: signed.signedUrl,
+        created_at: row.created_at,
+        size_bytes: row.size_bytes,
+        doc_count: row.doc_count,
+        stamped: true,
+      };
+    }
+  }
+
+  const { data: job, error: jobError } = await supabase.from("approved_archive_jobs")
+    .select("status,last_error,updated_at")
+    .eq("scope_key", scopeKey)
+    .maybeSingle();
+  if (jobError) throw new Error(jobError.message);
+  return {
+    signature,
+    doc_count,
+    cached,
+    job_status: job?.status ?? null,
+    job_error: job?.last_error ?? null,
+    job_updated_at: job?.updated_at ?? null,
+  };
 });
-export const createBundleUploadUrl = createServerFn({ method: "POST" }).middleware([requireAppAuth]).inputValidator((d: unknown) => z.object({ department_id: z.string().uuid().nullable().optional(), signature: z.string().min(8).max(64) }).parse(d)).handler(async ({ data, context }) => {
-  const { supabase, userId } = context; await assertBundleRole(supabase, userId); const scope = data.department_id ?? "all"; const path = `_stamped_bundles/${scope}-${data.signature}-${Date.now()}.zip`; const { data: signed, error } = await supabase.storage.from("documents").createSignedUploadUrl(path); if (error || !signed) throw new Error(error?.message ?? "Failed to create upload URL"); return { path: signed.path, token: signed.token };
-});
-export const finalizeBundleCache = createServerFn({ method: "POST" }).middleware([requireAppAuth]).inputValidator((d: unknown) => z.object({ department_id: z.string().uuid().nullable().optional(), signature: z.string().min(8).max(64), storage_path: z.string().min(1), doc_count: z.number().int().nonnegative(), size_bytes: z.number().int().nonnegative() }).parse(d)).handler(async ({ data, context }) => {
-  const { supabase, userId } = context; await assertBundleRole(supabase, userId); const departmentId = data.department_id ?? null; let staleQ = supabase.from("bundle_cache").select("id, storage_path").neq("signature", data.signature); staleQ = departmentId ? staleQ.eq("department_id", departmentId) : staleQ.is("department_id", null); const { data: stale } = await staleQ; if (stale?.length) { const paths = stale.map((r: any) => r.storage_path).filter(Boolean); if (paths.length) await supabase.storage.from("documents").remove(paths); await supabase.from("bundle_cache").delete().in("id", stale.map((r: any) => r.id)); } let sameQ = supabase.from("bundle_cache").delete().eq("signature", data.signature); sameQ = departmentId ? sameQ.eq("department_id", departmentId) : sameQ.is("department_id", null); await sameQ; await supabase.from("bundle_cache").insert({ department_id: departmentId, signature: data.signature, storage_path: data.storage_path, doc_count: data.doc_count, size_bytes: data.size_bytes, created_by: userId }); const { data: signed } = await supabase.storage.from("documents").createSignedUrl(data.storage_path, 60 * 60); return { url: signed?.signedUrl ?? null };
-});
+
+export const requestApprovedArchive = createServerFn({ method: "POST" })
+  .middleware([requireAppAuth])
+  .inputValidator((d: unknown) => z.object({ department_id: z.string().uuid().nullable().optional() }).optional().parse(d))
+  .handler(async ({ data, context }) => {
+    const { supabase, userId } = context;
+    await assertBundleRole(supabase, userId);
+    const departmentId = data?.department_id ?? null;
+    const scopeKey = departmentId ? `department:${departmentId}` : "all";
+    const { signature, doc_count } = await computeBundleSignature(supabase, departmentId);
+
+    let existingQuery = supabase.from("approved_archive_jobs").select("id,status")
+      .eq("scope_key", scopeKey).limit(1);
+    const { data: existingRows, error: existingError } = await existingQuery;
+    if (existingError) throw new Error(existingError.message);
+    const existing = existingRows?.[0] ?? null;
+    if (existing && (existing.status === "queued" || existing.status === "processing")) {
+      return { status: existing.status, signature, doc_count };
+    }
+
+    const jobPayload = {
+      scope_key: scopeKey,
+      department_id: departmentId,
+      status: "queued",
+      attempts: 0,
+      last_error: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      claimed_at: null,
+      finished_at: null,
+    };
+    const result = existing
+      ? await supabase.from("approved_archive_jobs").update(jobPayload).eq("id", existing.id)
+      : await supabase.from("approved_archive_jobs").insert(jobPayload);
+    if (result.error) throw new Error(result.error.message);
+    return { status: "queued", signature, doc_count };
+  });
 
 const deleteSchema = z.object({ document_id: z.string().uuid() });
 export const deleteDocument = createServerFn({ method: "POST" }).middleware([requireAppAuth]).inputValidator((d: unknown) => deleteSchema.parse(d)).handler(async ({ data, context }) => {
