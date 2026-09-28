@@ -128,22 +128,39 @@ security definer
 set search_path = public
 as $$
 declare
+  _document_id uuid;
+  _should_enqueue boolean := false;
   _department_id uuid;
 begin
-  if new.action = 'approve' and new.role = 'iqa' then
-    select department_id into _department_id from public.documents where id = new.document_id and status = 'approved';
+  if TG_OP = 'DELETE' then
+    _document_id := old.document_id;
+    _should_enqueue := old.action = 'approve' and old.role in ('hod', 'iqa');
+  elsif TG_OP = 'UPDATE' then
+    _document_id := new.document_id;
+    _should_enqueue := (old.action = 'approve' and old.role in ('hod', 'iqa'))
+      or (new.action = 'approve' and new.role in ('hod', 'iqa'));
+  else
+    _document_id := new.document_id;
+    _should_enqueue := new.action = 'approve' and new.role in ('hod', 'iqa');
+  end if;
+
+  if _should_enqueue then
+    select department_id into _department_id
+    from public.documents where id = _document_id and status = 'approved';
     if found then
       perform public.enqueue_approved_archive_scope(null);
       if _department_id is not null then perform public.enqueue_approved_archive_scope(_department_id); end if;
     end if;
   end if;
+
+  if TG_OP = 'DELETE' then return old; end if;
   return new;
 end;
 $$;
 
 drop trigger if exists approval_history_enqueue_approved_archive on public.approval_history;
 create trigger approval_history_enqueue_approved_archive
-after insert on public.approval_history
+after insert or update or delete on public.approval_history
 for each row execute function public.enqueue_approved_archive_after_final_approval();
 
 create or replace function public.claim_approved_archive_jobs(p_limit integer default 1)
