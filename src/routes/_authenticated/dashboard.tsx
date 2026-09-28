@@ -280,10 +280,6 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
   const cacheQuery = useQuery({
     queryKey: ["approved-bundle-cache", deptFilter],
     queryFn: () => fetchBundleCache({ data: deptFilter === "all" ? {} : { department_id: deptFilter } }),
-    refetchInterval: (query) => {
-      const status = query.state.data?.job_status;
-      return status === "queued" || status === "processing" ? 4000 : false;
-    },
     refetchOnWindowFocus: true,
   });
 
@@ -313,7 +309,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
     try {
       const current = await cacheQuery.refetch();
       const cached = current.data?.cached;
-      if (cached?.url && cached.stamped) {
+      if (cached?.url) {
         triggerBrowserDownload(cached.url, bundleFilename());
         toast.success(`Downloading ready archive (${cached.doc_count} documents)`);
         return;
@@ -339,20 +335,10 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
   }
 
   const cacheInfo = cacheQuery.data;
-  const preparing = false;
-  const failed = false;
-  const jobAgeMs = 0;
-  const stalled = false;
-  const ready = Boolean(cacheInfo?.cached?.url && cacheInfo.cached.stamped);
+  const ready = Boolean(cacheInfo?.cached?.url);
   const buttonLabel = ready
     ? `Download ZIP (${cacheInfo?.cached?.doc_count ?? filteredDocs.length})`
-    : stalled
-      ? "Archive taking too long"
-      : preparing
-        ? "Preparing archive…"
-        : failed
-          ? "Retry archive preparation"
-          : `Prepare ZIP (${filteredDocs.length})`;
+    : `Build ZIP (${filteredDocs.length})`;
 
   return (
     <Card>
@@ -362,17 +348,6 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
           <p className="mt-1 text-xs text-muted-foreground">
             View-only archive — filter by department and download approved documents as a ZIP.
           </p>
-          {preparing && (
-            <p className="mt-2 text-xs text-muted-foreground">Archive preparation runs when you request a download.</p>
-          )}
-          {failed && cacheInfo?.job_error && (
-            <p className="mt-2 text-xs text-destructive">Archive preparation failed. Try again.</p>
-          )}
-          {stalled && (
-            <p className="mt-2 text-xs text-destructive">
-              The archive is taking longer than expected. You can try again.
-            </p>
-          )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={deptFilter} onValueChange={setDeptFilter}>
@@ -385,8 +360,8 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
             </SelectContent>
           </Select>
           <Button onClick={downloadZip} disabled={requesting || filteredDocs.length === 0}>
-            {requesting || preparing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-            {requesting ? "Checking archive…" : buttonLabel}
+            {requesting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" /> }
+            {requesting ? "Building ZIP…" : buttonLabel}
           </Button>
         </div>
       </CardHeader>
