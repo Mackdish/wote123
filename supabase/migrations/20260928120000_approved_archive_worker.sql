@@ -16,6 +16,8 @@ create index if not exists approved_archive_jobs_status_created_idx
   on public.approved_archive_jobs(status, created_at);
 
 alter table public.approved_archive_jobs enable row level security;
+grant select, insert, update on public.approved_archive_jobs to authenticated;
+grant all on public.approved_archive_jobs to service_role;
 
 drop policy if exists "Archive managers can read preparation status" on public.approved_archive_jobs;
 create policy "Archive managers can read preparation status"
