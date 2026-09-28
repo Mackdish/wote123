@@ -233,63 +233,15 @@ export const getBundleCache = createServerFn({ method: "GET" }).middleware([requ
     }
   }
 
-  const { data: job, error: jobError } = await supabase.from("approved_archive_jobs")
-    .select("status,last_error,updated_at")
-    .eq("scope_key", scopeKey)
-    .maybeSingle();
-  if (jobError) throw new Error(jobError.message);
   return {
     signature,
     doc_count,
     cached,
-    job_status: job?.status ?? null,
-    job_error: job?.last_error ?? null,
-    job_updated_at: job?.updated_at ?? null,
+    job_status: null,
+    job_error: null,
+    job_updated_at: null,
   };
 });
-
-export const requestApprovedArchive = createServerFn({ method: "POST" })
-  .middleware([requireAppAuth])
-  .inputValidator((d: unknown) => z.object({ department_id: z.string().uuid().nullable().optional() }).optional().parse(d))
-  .handler(async ({ data, context }) => {
-    const { supabase, userId } = context;
-    await assertBundleRole(supabase, userId);
-    const departmentId = data?.department_id ?? null;
-    const scopeKey = departmentId ? `department:${departmentId}` : "all";
-    const { signature, doc_count } = await computeBundleSignature(supabase, departmentId);
-
-    let existingQuery = supabase.from("approved_archive_jobs").select("id,status,updated_at")
-      .eq("scope_key", scopeKey).limit(1);
-    const { data: existingRows, error: existingError } = await existingQuery;
-    if (existingError) throw new Error(existingError.message);
-    const existing = existingRows?.[0] ?? null;
-    if (existing && existing.status === "processing") {
-      return { status: existing.status, signature, doc_count };
-    }
-    if (existing && existing.status === "queued") {
-      const ageMs = Date.now() - new Date(existing.updated_at).getTime();
-      if (Number.isFinite(ageMs) && ageMs < 5 * 60 * 1000) {
-        return { status: existing.status, signature, doc_count };
-      }
-    }
-
-    const jobPayload = {
-      scope_key: scopeKey,
-      department_id: departmentId,
-      status: "queued",
-      attempts: 0,
-      last_error: null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      claimed_at: null,
-      finished_at: null,
-    };
-    const result = existing
-      ? await supabase.from("approved_archive_jobs").update(jobPayload).eq("id", existing.id)
-      : await supabase.from("approved_archive_jobs").insert(jobPayload);
-    if (result.error) throw new Error(result.error.message);
-    return { status: "queued", signature, doc_count };
-  });
 
 const deleteSchema = z.object({ document_id: z.string().uuid() });
 export const deleteDocument = createServerFn({ method: "POST" }).middleware([requireAppAuth]).inputValidator((d: unknown) => deleteSchema.parse(d)).handler(async ({ data, context }) => {
