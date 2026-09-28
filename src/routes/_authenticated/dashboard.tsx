@@ -276,6 +276,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
   const finalizeBundle = useServerFn(finalizeBundleCache);
   const depts = useQuery({ queryKey: ["departments"], queryFn: () => fetchDepts() });
   const [zipping, setZipping] = useState(false);
+  const [zipStage, setZipStage] = useState("Preparing");
   const [deptFilter, setDeptFilter] = useState<string>("all");
 
   const filteredDocs = useMemo(
@@ -303,6 +304,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
   async function downloadZip() {
     if (zipping || filteredDocs.length === 0) return;
     setZipping(true);
+    setZipStage("Checking archive");
     try {
       // Ask the server for the current bundle signature. We intentionally use
       // a browser cache for stamped archives because the old server cache may
@@ -331,6 +333,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
         }
       }
 
+      setZipStage("Loading documents");
       const items = await fetchBundle({ data: deptFilter === "all" ? {} : { department_id: deptFilter } });
       if (!items?.length) throw new Error("No approved documents are available for this download.");
 
@@ -378,6 +381,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
         return originalName;
       }
 
+      setZipStage("Stamping documents");
       // Render a few documents at once instead of processing the entire archive
       // serially. This substantially reduces wait time while avoiding excessive
       // browser memory use from rendering many DOCX files simultaneously.
@@ -395,9 +399,11 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
       }
 
       if (!added) throw new Error("No documents could be prepared for download.");
+      setZipStage("Creating ZIP");
       // Stored ZIP entries avoid spending extra CPU deflating PDFs and already-compressed DOCX files.
       const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
 
+      setZipStage("Saving archive");
       // Persist the finished stamped ZIP locally. Subsequent downloads with the
       // same approved-document/approval signature are immediate and do not
       // re-render DOCX files or rebuild the ZIP.
@@ -457,6 +463,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
       toast.error(e?.message ?? "Failed to build stamped archive");
     } finally {
       setZipping(false);
+      setZipStage("Preparing");
     }
   }
 
@@ -481,7 +488,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
           </Select>
           <Button onClick={downloadZip} disabled={zipping || filteredDocs.length === 0}>
             {zipping ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
-            {zipping ? `Preparing… (${filteredDocs.length})` : `Download ZIP (${filteredDocs.length})`}
+            {zipping ? `${zipStage}… (${filteredDocs.length})` : `Download ZIP (${filteredDocs.length})`}
           </Button>
         </div>
       </CardHeader>
