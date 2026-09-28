@@ -337,7 +337,7 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
       const zip = new JSZip();
       let added = 0;
 
-      const STAMP_CONCURRENCY = 2;
+      const STAMP_CONCURRENCY = 4;
       const stampQueue = [...(items as any[])];
       async function processItem(item: any) {
         const originalName = item.file_name || `${item.title || "document"}.bin`;
@@ -395,7 +395,8 @@ function ApprovedArchive({ docs }: { docs: any[] }) {
       }
 
       if (!added) throw new Error("No documents could be prepared for download.");
-      const blob = await zip.generateAsync({ type: "blob" });
+      // Stored ZIP entries avoid spending extra CPU deflating PDFs and already-compressed DOCX files.
+      const blob = await zip.generateAsync({ type: "blob", compression: "STORE" });
 
       // Persist the finished stamped ZIP locally. Subsequent downloads with the
       // same approved-document/approval signature are immediate and do not
