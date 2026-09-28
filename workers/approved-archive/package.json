@@ -1,0 +1,13 @@
+{
+  "name": "wtti-approved-archive-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node worker.mjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.4",
+    "jszip": "^3.10.1",
+    "pdf-lib": "^1.17.1"
+  }
+}
