@@ -3,7 +3,7 @@ import JSZip from "jszip";
 import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -39,10 +39,6 @@ const stampBytes = {
   hod: await readFile(new URL("./assets/hod-stamp.png", import.meta.url)),
   iqa: await readFile(new URL("./assets/iqa-stamp.png", import.meta.url)),
 };
-
-function scopeKey(departmentId) {
-  return departmentId ? `department:${departmentId}` : "all";
-}
 
 async function computeSignature(docs, approvals) {
   const payload = [
@@ -110,37 +106,11 @@ async function stampPdf(bytes, stamps, name) {
   return Buffer.from(await pdf.save());
 }
 
-function runLibreOffice(sourcePath, outputDir) {
-  return new Promise((resolve, reject) => {
-    const child = spawn("soffice", [
-      "--headless",
-      "--convert-to", "pdf",
-      "--outdir", outputDir,
-      sourcePath,
-    ], { stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    const timeout = setTimeout(() => child.kill("SIGKILL"), 120_000);
-    child.on("error", (error) => {
-      clearTimeout(timeout);
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timeout);
-      if (code !== 0) reject(new Error(`LibreOffice conversion failed (${code}): ${stderr || stdout}`));
-      else resolve();
-    });
-  });
-}
-
 async function convertOfficeToPdf(bytes, fileName, workDir) {
   const safeBase = path.basename(fileName, path.extname(fileName)).replace(/[^a-zA-Z0-9._-]/g, "_") || "document";
   const inputDir = path.join(workDir, "input");
   const outputDir = path.join(workDir, "output");
   const profileDir = path.join(workDir, "lo-profile");
-  const { mkdir } = await import("node:fs/promises");
   await mkdir(inputDir, { recursive: true });
   await mkdir(outputDir, { recursive: true });
   const sourcePath = path.join(inputDir, safeBase + path.extname(fileName).toLowerCase());
