@@ -17,12 +17,16 @@ const ROLE_LABEL: Record<Props["role"], string> = {
   iqa: "IQA Officer",
 };
 
-function currentStampDate() {
-  return new Date().toLocaleDateString();
+function formatStampDate(date?: string | null) {
+  const source = date ? new Date(date) : new Date();
+  if (Number.isNaN(source.getTime())) {
+    return new Date().toLocaleDateString();
+  }
+  return source.toLocaleDateString();
 }
 
 export function ApprovalStamp({ role, approverName, date }: Props) {
-  const formatted = currentStampDate();
+  const formatted = formatStampDate(date);
   const dateLine = `DATE: ${formatted}: APPROVED`;
   return (
     <div
