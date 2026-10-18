@@ -38,7 +38,7 @@ async function getActor(supabase: any, userId: string) {
   if (!profile) { await supabase.rpc("ensure_my_profile"); const { data: created } = await supabase.from("profiles").select("id, full_name, email, department_id").eq("id", userId).maybeSingle(); profile = created ?? null; if (!roles.length) roles = await getRoles(supabase, userId); }
   return { profile, roles, departmentId: profile?.department_id ?? null };
 }
-const IQA_VISIBLE_STATUSES: DocumentStatus[] = ["pending_iqa", "rejected_iqa", "pending_dp", "rejected_dp", "approved"];
+const IQA_VISIBLE_STATUSES: DocumentStatus[] = ["pending_iqa", "rejected_iqa", "pending_hod", "rejected_hod", "pending_dp", "rejected_dp", "approved"];
 const DP_VISIBLE_STATUSES: DocumentStatus[] = ["pending_dp", "rejected_dp", "approved"];
 function canViewDocumentRow(doc: any, roles: AppRole[], userId: string, departmentId: string | null) {
   if (roles.includes("admin")) return true; if (doc.trainer_id === userId) return true;
@@ -59,10 +59,10 @@ export const submitDocument = createServerFn({ method: "POST" }).middleware([req
   const { supabase, userId } = context; const { data: profile } = await supabase.from("profiles").select("department_id, full_name").eq("id", userId).maybeSingle(); let deptId = profile?.department_id || data.department_id || null;
   if (data.parent_document_id) { const { data: parent } = await supabase.from("documents").select("department_id, trainer_id").eq("id", data.parent_document_id).maybeSingle(); if (!parent) throw new Error("Parent document not found or not accessible"); if (parent.trainer_id !== userId) throw new Error("Only the original trainer can upload a new version"); deptId = parent.department_id ?? deptId; }
   if (!deptId) throw new Error("Your account has no department assigned. Ask an administrator to set your department, or pick one on this form, so your HOD can see the submission.");
-  const { data: doc, error } = await supabase.from("documents").insert({ ...data, trainer_id: userId, department_id: deptId, status: "pending_hod" as DocumentStatus }).select().single(); if (error) throw new Error(error.message);
+  const { data: doc, error } = await supabase.from("documents").insert({ ...data, trainer_id: userId, department_id: deptId, status: "pending_iqa" as DocumentStatus }).select().single(); if (error) throw new Error(error.message);
   await supabase.from("approval_history").insert({ document_id: doc.id, approver_id: userId, role: "trainer", action: "submitted", comment: `Submitted by ${profile?.full_name ?? "trainer"}` });
-  const hodIds = new Set<string>(await usersWithRole(supabase, "hod", deptId)); const { data: deptRow } = await supabase.from("departments").select("hod_id").eq("id", deptId).maybeSingle(); if (deptRow?.hod_id) hodIds.add(deptRow.hod_id);
-  await notify(supabase, Array.from(hodIds), "New submission for review", `"${doc.title}" is awaiting your review.`, `/documents/${doc.id}`); return { id: doc.id };
+  const iqaIds = await usersWithRole(supabase, "iqa", deptId);
+  await notify(supabase, iqaIds, "New submission for IQA review", `"${doc.title}" is awaiting initial quality assurance.`, `/documents/${doc.id}`); return { id: doc.id };
 });
 
 const actionSchema = z.object({ document_id: z.string().uuid(), action: z.enum(["approve", "reject"]), comment: z.string().trim().max(2000).optional().nullable() });
@@ -70,8 +70,8 @@ export const reviewDocument = createServerFn({ method: "POST" }).middleware([req
   const { supabase, userId } = context; const { roles, departmentId } = await getActor(supabase, userId); const { data: doc, error } = await supabase.from("documents").select("*").eq("id", data.document_id).maybeSingle();
   if (error || !doc) throw new Error("Document not found"); if (!canViewDocumentRow(doc, roles, userId, departmentId)) throw new Error("You cannot access this document.");
   let nextStatus: DocumentStatus | null = null; let stageRole: AppRole | null = null;
-  if (doc.status === "pending_hod" && roles.includes("hod") && departmentId && doc.department_id === departmentId) { stageRole = "hod"; nextStatus = data.action === "approve" ? "pending_iqa" : "rejected_hod"; }
-  else if (doc.status === "pending_iqa" && roles.includes("iqa") && departmentId && doc.department_id === departmentId) { stageRole = "iqa"; nextStatus = data.action === "approve" ? "approved" : "rejected_iqa"; }
+  if (doc.status === "pending_iqa" && roles.includes("iqa") && departmentId && doc.department_id === departmentId) { stageRole = "iqa"; nextStatus = data.action === "approve" ? "pending_hod" : "rejected_iqa"; }
+  else if (doc.status === "pending_hod" && roles.includes("hod") && departmentId && doc.department_id === departmentId) { stageRole = "hod"; nextStatus = data.action === "approve" ? "approved" : "rejected_hod"; }
   else throw new Error("You cannot review this document at its current stage.");
   const { error: upErr } = await supabase.from("documents").update({ status: nextStatus }).eq("id", doc.id); if (upErr) throw new Error(upErr.message);
   // The status update above is the approval transaction's source of truth.
@@ -99,9 +99,11 @@ export const reviewDocument = createServerFn({ method: "POST" }).middleware([req
       `/documents/${doc.id}`,
     );
     if (data.action === "approve") {
-      if (nextStatus === "pending_iqa") {
-        const iqaIds = await usersWithRole(supabase, "iqa", doc.department_id ?? null);
-        await notify(supabase, iqaIds, "Document awaiting IQA review", `"${doc.title}" is ready for quality assurance.`, `/documents/${doc.id}`);
+      if (nextStatus === "pending_hod") {
+        const hodIds = new Set<string>(await usersWithRole(supabase, "hod", doc.department_id ?? null));
+        const { data: deptRow } = await supabase.from("departments").select("hod_id").eq("id", doc.department_id).maybeSingle();
+        if (deptRow?.hod_id) hodIds.add(deptRow.hod_id);
+        await notify(supabase, Array.from(hodIds), "Document awaiting HOD review", `"${doc.title}" has passed IQA and is ready for departmental approval.`, `/documents/${doc.id}`);
       } else if (nextStatus === "approved") {
         const [hodIds, dpIds, adminIds] = await Promise.all([
           usersWithRole(supabase, "hod", doc.department_id ?? null),
