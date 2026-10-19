@@ -238,6 +238,7 @@ function Landing() {
               <li><a href="#features" className="hover:opacity-100">Features</a></li>
               <li><a href="#workflow" className="hover:opacity-100">Workflow</a></li>
               <li><Link to="/auth" className="hover:opacity-100">Sign in</Link></li>
+              <li><Link to="/auth" className="hover:opacity-100">Sign up</Link></li>
             </ul>
           </div>
         </div>
