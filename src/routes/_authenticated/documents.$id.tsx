@@ -154,6 +154,7 @@ function DocPage() {
                     role: h.role as "hod" | "iqa",
                     approverName: h.approver?.full_name || h.approver?.email,
                     date: h.created_at,
+                    departmentName: h.role === "hod" ? department?.name : null,
                   })),
                 });
                 const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
@@ -193,6 +194,7 @@ function DocPage() {
                         role={h.role as "hod" | "iqa"}
                         approverName={h.approver?.full_name || h.approver?.email}
                         date={h.created_at}
+                        departmentName={h.role === "hod" ? department?.name : null}
                       />
                     ))}
                   </div>
