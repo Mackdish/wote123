@@ -71,6 +71,7 @@ export const reviewDocument = createServerFn({ method: "POST" }).middleware([req
   if (error || !doc) throw new Error("Document not found"); if (!canViewDocumentRow(doc, roles, userId, departmentId)) throw new Error("You cannot access this document.");
   let nextStatus: DocumentStatus | null = null; let stageRole: AppRole | null = null;
   if (doc.status === "pending_iqa" && roles.includes("iqa") && departmentId && doc.department_id === departmentId) { stageRole = "iqa"; nextStatus = data.action === "approve" ? "pending_hod" : "rejected_iqa"; }
+  // Deployment trigger: preserve the Trainer -> IQA -> HOD document approval flow.
   else if (doc.status === "pending_hod" && roles.includes("hod") && departmentId && doc.department_id === departmentId) { stageRole = "hod"; nextStatus = data.action === "approve" ? "approved" : "pending_iqa"; }
   else throw new Error("You cannot review this document at its current stage.");
   const { error: upErr } = await supabase.from("documents").update({ status: nextStatus }).eq("id", doc.id); if (upErr) throw new Error(upErr.message);
