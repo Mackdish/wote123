@@ -133,10 +133,10 @@ function drawStamp(
   if (stamp.role === "hod" && stamp.departmentName) {
     // The source stamp image contains a hard-coded "CIT DEPARTMENT" label.
     // Cover that inner label and print the actual department in the same position.
-    const labelWidth = width * 0.60;
-    const labelHeight = height * 0.15;
+    const labelWidth = width * 0.86;
+    const labelHeight = height * 0.22;
     const labelX = x + (width - labelWidth) / 2;
-    const labelY = y + 18 + height * 0.55;
+    const labelY = y + 18 + height * 0.67;
     page.drawRectangle({
       x: labelX,
       y: labelY,
