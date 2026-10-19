@@ -121,31 +121,35 @@ function LibraryPage() {
       for (const item of result.items ?? []) {
         const originalName = item.file_name || `${item.title || "document"}.bin`;
         const lowerName = originalName.toLowerCase();
-        const canStamp = lowerName.endsWith(".pdf") || lowerName.endsWith(".docx") || lowerName.endsWith(".docm");
+        const canStamp = /\.(pdf|docx|docm)$/.test(lowerName);
         const stampInputs = (item.stamps ?? []).filter((s: any) => s.role === "hod" || s.role === "iqa");
 
-        if (canStamp && stampInputs.length > 0) {
-          const stamped = await buildStampedPdf({
-            title: item.title,
-            meta: {
-              "Academic Year": item.academic_year || "—",
-              Term: item.term || "—",
-              Status: item.status || "—",
-            },
-            fileUrl: item.url,
-            fileName: originalName,
-            stamps: stampInputs.map((stamp: any) => ({
-              ...stamp,
-              departmentName: stamp.role === "hod" ? item.department_name ?? null : null,
-            })),
-          });
-          const stampedName = originalName.replace(/\.[^.]+$/, "") + "_stamped.pdf";
-          zip.file(stampedName, stamped);
-        } else {
-          const res = await fetch(item.url);
-          if (!res.ok) throw new Error(`Download failed: ${res.status}`);
-          zip.file(originalName, await res.arrayBuffer());
+        // Never silently put an original, unstamped file into a ZIP advertised as stamped.
+        if (!canStamp) {
+          throw new Error(`Cannot stamp "${originalName}". Only PDF, DOCX and DOCM files are supported. No ZIP was created; convert this file to PDF or DOCX and retry.`);
         }
+        if (stampInputs.length === 0) {
+          throw new Error(`"${originalName}" has no recorded IQA/HOD approval stamp history. No ZIP was created so this file is not silently included unstamped.`);
+        }
+
+        const stamped = await buildStampedPdf({
+          title: item.title,
+          meta: {
+            "Academic Year": item.academic_year || "—",
+            Term: item.term || "—",
+            Status: item.status || "—",
+          },
+          fileUrl: item.url,
+          fileName: originalName,
+          stamps: stampInputs.map((stamp: any) => ({
+            ...stamp,
+            departmentName: stamp.role === "hod" ? item.department_name ?? null : null,
+          })),
+        });
+        // Prefix with document ID to prevent files with identical names overwriting each other in JSZip.
+        const safeId = String(item.id || "").slice(0, 8);
+        const stampedName = `${safeId ? safeId + "_" : ""}${originalName.replace(/\.[^.]+$/, "")}_stamped.pdf`;
+        zip.file(stampedName, stamped);
         added++;
       }
 
