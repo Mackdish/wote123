@@ -65,14 +65,14 @@ export const submitDocument = createServerFn({ method: "POST" }).middleware([req
   await notify(supabase, iqaIds, "New submission for IQA review", `"${doc.title}" is awaiting initial quality assurance.`, `/documents/${doc.id}`); return { id: doc.id };
 });
 
-const actionSchema = z.object({ document_id: z.string().uuid(), action: z.enum(["approve", "reject"]), comment: z.string().trim().max(2000).optional().nullable() });
+const actionSchema = z.object({ document_id: z.string().uuid(), action: z.enum(["approve", "reject"]), comment: z.string().trim().max(2000).optional().nullable() }).superRefine((value, ctx) => { if (value.action === "reject" && !value.comment?.trim()) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["comment"], message: "Add a comment explaining what needs to be corrected before rejecting this document." }); });
 export const reviewDocument = createServerFn({ method: "POST" }).middleware([requireAppAuth]).inputValidator((d: unknown) => actionSchema.parse(d)).handler(async ({ data, context }) => {
   const { supabase, userId } = context; const { roles, departmentId } = await getActor(supabase, userId); const { data: doc, error } = await supabase.from("documents").select("*").eq("id", data.document_id).maybeSingle();
   if (error || !doc) throw new Error("Document not found"); if (!canViewDocumentRow(doc, roles, userId, departmentId)) throw new Error("You cannot access this document.");
   let nextStatus: DocumentStatus | null = null; let stageRole: AppRole | null = null;
   if (doc.status === "pending_iqa" && roles.includes("iqa") && departmentId && doc.department_id === departmentId) { stageRole = "iqa"; nextStatus = data.action === "approve" ? "pending_hod" : "rejected_iqa"; }
   // Deployment trigger: preserve the Trainer -> IQA -> HOD document approval flow.
-  else if (doc.status === "pending_hod" && roles.includes("hod") && departmentId && doc.department_id === departmentId) { stageRole = "hod"; nextStatus = data.action === "approve" ? "approved" : "pending_iqa"; }
+  else if (doc.status === "pending_hod" && roles.includes("hod") && departmentId && doc.department_id === departmentId) { stageRole = "hod"; nextStatus = data.action === "approve" ? "approved" : "rejected_hod"; }
   else throw new Error("You cannot review this document at its current stage.");
   const { error: upErr } = await supabase.from("documents").update({ status: nextStatus }).eq("id", doc.id); if (upErr) throw new Error(upErr.message);
   // The status update above is the approval transaction's source of truth.
@@ -96,12 +96,12 @@ export const reviewDocument = createServerFn({ method: "POST" }).middleware([req
       supabase,
       [doc.trainer_id],
       data.action === "approve" ? "Your document moved forward" : "Your document was returned",
-      `"${doc.title}" — ${data.action === "approve" ? "approved" : "rejected"} at ${stageRole.toUpperCase()} stage.`,
+      `"${doc.title}" — ${data.action === "approve" ? "approved" : "returned for corrections"} at ${stageRole.toUpperCase()} stage.${data.action === "reject" && data.comment ? ` Reviewer comments: ${data.comment}` : ""}`,
       `/documents/${doc.id}`,
     );
     if (stageRole === "hod" && data.action === "reject") {
       const iqaIds = await usersWithRole(supabase, "iqa", doc.department_id ?? null);
-      await notify(supabase, iqaIds, "Document returned for IQA re-review", `The HOD returned "${doc.title}". Please coordinate with the trainer on corrections before it proceeds to HOD review again.`, `/documents/${doc.id}`);
+      await notify(supabase, iqaIds, "Document returned for IQA re-review", `The HOD returned "${doc.title}" for corrections. Coordinate with the trainer; after resubmission, the revised version will go through IQA before returning to HOD review. Reviewer comments: ${data.comment}`, `/documents/${doc.id}`);
     }
     if (data.action === "approve") {
       if (nextStatus === "pending_hod") {
