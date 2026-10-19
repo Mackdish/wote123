@@ -136,6 +136,7 @@ function drawStamp(
     const labelWidth = width * 0.92;
     const labelHeight = height * 0.20;
     const labelX = x + (width - labelWidth) / 2;
+    // Deployment trigger: retain the HOD department-label correction in this stamping path.
     // The template's hard-coded CIT DEPARTMENT sits below the dynamic label.
     // Cover that row directly, leaving a clean blank department slot.
     const labelY = y + 18 + height * 0.40;
