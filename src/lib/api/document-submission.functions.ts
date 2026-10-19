@@ -63,7 +63,7 @@ export const submitDocumentForCurrentPeriod = createServerFn({ method: "POST" })
       department_id: deptId,
       parent_document_id: data.parent_document_id || null,
       trainer_id: userId,
-      status: "pending_hod" as DocumentStatus,
+      status: "pending_iqa" as DocumentStatus,
     }).select().single();
     if (error) {
       // Do not leave an orphaned upload when the database insert fails.
@@ -91,16 +91,12 @@ export const submitDocumentForCurrentPeriod = createServerFn({ method: "POST" })
     }
 
     try {
-      const hodIds = new Set<string>(await usersWithRole(supabase, "hod", deptId));
-      const { data: deptRow, error: deptError } = await supabase.from("departments").select("hod_id").eq("id", deptId).maybeSingle();
-      if (deptError) console.error("[document-submission] department lookup failed", deptError);
-
-      if (deptRow?.hod_id) hodIds.add(deptRow.hod_id);
-      if (hodIds.size) {
+      const iqaIds = await usersWithRole(supabase, "iqa", deptId);
+      if (iqaIds.length) {
         const { error: notificationError } = await supabase.rpc("notify_users", {
-          _user_ids: Array.from(hodIds),
-          _title: "New submission for review",
-          _message: `"${doc.title}" is awaiting your review.`,
+          _user_ids: iqaIds,
+          _title: data.parent_document_id ? "Revised document awaiting IQA review" : "New submission for IQA review",
+          _message: `"${doc.title}" is awaiting initial quality assurance.`,
           _link: `/documents/${doc.id}`,
         });
         if (notificationError) console.error("[document-submission] notification failed", notificationError);
