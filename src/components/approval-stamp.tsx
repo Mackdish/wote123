@@ -5,6 +5,7 @@ type Props = {
   role: "hod" | "iqa";
   approverName?: string | null;
   date?: string | null;
+  departmentName?: string | null;
 };
 
 const STAMP_SRC: Record<Props["role"], string> = {
@@ -25,7 +26,7 @@ function formatStampDate(date?: string | null) {
   return source.toLocaleDateString();
 }
 
-export function ApprovalStamp({ role, approverName, date }: Props) {
+export function ApprovalStamp({ role, approverName, date, departmentName }: Props) {
   const formatted = formatStampDate(date);
   const dateLine = `DATE: ${formatted}: APPROVED`;
   return (
@@ -46,6 +47,11 @@ export function ApprovalStamp({ role, approverName, date }: Props) {
           </div>
         )}
       </div>
+      {role === "hod" && departmentName && (
+        <div className="max-w-[220px] text-center text-[10px] font-bold uppercase tracking-wide text-[#6d2f92]">
+          {departmentName}
+        </div>
+      )}
       {role === "iqa" && (
         <div className="text-[10px] font-bold text-[#1e3a8a]">{dateLine}</div>
       )}
