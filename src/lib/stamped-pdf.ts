@@ -133,10 +133,12 @@ function drawStamp(
   if (stamp.role === "hod" && stamp.departmentName) {
     // The source stamp image contains a hard-coded "CIT DEPARTMENT" label.
     // Cover that inner label and print the actual department in the same position.
-    const labelWidth = width * 0.86;
-    const labelHeight = height * 0.22;
+    const labelWidth = width * 0.92;
+    const labelHeight = height * 0.20;
     const labelX = x + (width - labelWidth) / 2;
-    const labelY = y + 18 + height * 0.55;
+    // The template's hard-coded CIT DEPARTMENT sits below the dynamic label.
+    // Cover that row directly, leaving a clean blank department slot.
+    const labelY = y + 18 + height * 0.40;
     page.drawRectangle({
       x: labelX,
       y: labelY,
