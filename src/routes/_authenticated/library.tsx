@@ -134,7 +134,10 @@ function LibraryPage() {
             },
             fileUrl: item.url,
             fileName: originalName,
-            stamps: stampInputs,
+            stamps: stampInputs.map((stamp: any) => ({
+              ...stamp,
+              departmentName: stamp.role === "hod" ? item.department_name ?? null : null,
+            })),
           });
           const stampedName = originalName.replace(/\.[^.]+$/, "") + "_stamped.pdf";
           zip.file(stampedName, stamped);
