@@ -92,11 +92,14 @@ export const reviewDocument = createServerFn({ method: "POST" }).middleware([req
   // documents. After verifying the caller's role, department, and stage above,
   // perform this narrow status write with the server-only secret client.
   const reviewWriter = createReviewWriteClient();
-  const { error: upErr } = await reviewWriter.from("documents")
+  const { data: updatedDoc, error: upErr } = await reviewWriter.from("documents")
     .update({ status: nextStatus })
     .eq("id", doc.id)
-    .eq("status", doc.status);
+    .eq("status", doc.status)
+    .select("id")
+    .maybeSingle();
   if (upErr) throw new Error(`Could not save the review decision: ${upErr.message}`);
+  if (!updatedDoc) throw new Error("This document changed while you were reviewing it. Refresh the page and try again.");
   // The status update above is the approval transaction's source of truth.
   // History, notifications and audit logging are secondary side effects and
   // must not make a successful approval/rejection appear to have failed.
