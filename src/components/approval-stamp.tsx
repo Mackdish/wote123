@@ -42,16 +42,18 @@ export function ApprovalStamp({ role, approverName, date, departmentName }: Prop
           className="h-auto w-full"
         />
         {role === "hod" && (
-          <div className="absolute inset-x-0 bottom-[25px] text-center text-[10px] font-bold text-[#6d2f92]">
-            {dateLine}
-          </div>
+          <>
+            <div className="absolute inset-x-0 bottom-[25px] text-center text-[10px] font-bold text-[#6d2f92]">
+              {dateLine}
+            </div>
+            {departmentName && (
+              <div className="absolute left-[20%] top-[31%] flex h-[15%] w-[60%] items-center justify-center bg-white px-1 text-center text-[10px] font-bold uppercase leading-tight text-[#6d2f92]">
+                {departmentName}
+              </div>
+            )}
+          </>
         )}
       </div>
-      {role === "hod" && departmentName && (
-        <div className="max-w-[220px] text-center text-[10px] font-bold uppercase tracking-wide text-[#6d2f92]">
-          {departmentName}
-        </div>
-      )}
       {role === "iqa" && (
         <div className="text-[10px] font-bold text-[#1e3a8a]">{dateLine}</div>
       )}
