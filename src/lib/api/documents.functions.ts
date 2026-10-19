@@ -260,6 +260,8 @@ export const downloadLibraryFolder = createServerFn({ method: "POST" }).middlewa
   const { supabase, userId } = context;
   const { data: canView } = await supabase.rpc("can_view_library", { _user_id: userId });
   if (!canView) throw new Error("Forbidden: the Document Library is limited to the Deputy Principal and Administrators.");
+  const { data: departmentRecord } = await supabase.from("departments").select("name").eq("id", data.department_id).maybeSingle();
+  const departmentName = departmentRecord?.name ?? null;
 
   let q = supabase.from("documents").select("id, title, file_path, file_name, document_type, trainer_id, department_id, status, academic_year, term").eq("department_id", data.department_id).order("created_at", { ascending: false });
   if (data.trainer_id) q = q.eq("trainer_id", data.trainer_id);
@@ -310,6 +312,7 @@ export const downloadLibraryFolder = createServerFn({ method: "POST" }).middlewa
       status: d.status,
       academic_year: d.academic_year,
       term: d.term,
+      department_name: departmentName,
       url: signed.signedUrl,
       stamps,
     });
