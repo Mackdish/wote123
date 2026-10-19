@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { requireAppAuth } from "@/lib/auth-middleware";
 import { DOC_TYPE_LABELS, type AppRole, type DocumentStatus, type DocumentType } from "@/lib/types";
@@ -18,6 +19,19 @@ const submitSchema = z.object({
   session: z.string().trim().max(50).optional().nullable(), file_path: z.string().min(1), file_name: z.string().min(1),
   mime_type: z.string().optional().nullable(), department_id: z.string().uuid().optional().nullable(), parent_document_id: z.string().uuid().optional().nullable(),
 });
+
+function createReviewWriteClient() {
+  const backendUrl = process.env["SUPABASE_URL"] || import.meta.env["VITE_SUPABASE_URL"];
+  const secretKey = process.env["SUPABASE_SECRET_KEY"] || process.env["SUPABASE_SERVICE_ROLE_KEY"];
+  if (!backendUrl || !secretKey) {
+    throw new Error("Secure review writes are not configured. Add SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) to the Cloudflare Worker environment.");
+  }
+  // Server-only elevated client is used only after the caller's identity, role,
+  // department, and current document stage have been checked with the user-scoped client.
+  return createClient(backendUrl, secretKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+}
 
 async function notify(supabase: any, userIds: string[], title: string, message: string, link?: string) {
   const ids = Array.from(new Set(userIds.filter(Boolean))); if (!ids.length) return;
@@ -74,12 +88,20 @@ export const reviewDocument = createServerFn({ method: "POST" }).middleware([req
   // Deployment trigger: preserve the Trainer -> IQA -> HOD document approval flow.
   else if (doc.status === "pending_hod" && roles.includes("hod") && departmentId && doc.department_id === departmentId) { stageRole = "hod"; nextStatus = data.action === "approve" ? "approved" : "rejected_hod"; }
   else throw new Error("You cannot review this document at its current stage.");
-  const { error: upErr } = await supabase.from("documents").update({ status: nextStatus }).eq("id", doc.id); if (upErr) throw new Error(upErr.message);
+  // RLS policies can correctly prevent reviewer accounts from directly updating
+  // documents. After verifying the caller's role, department, and stage above,
+  // perform this narrow status write with the server-only secret client.
+  const reviewWriter = createReviewWriteClient();
+  const { error: upErr } = await reviewWriter.from("documents")
+    .update({ status: nextStatus })
+    .eq("id", doc.id)
+    .eq("status", doc.status);
+  if (upErr) throw new Error(`Could not save the review decision: ${upErr.message}`);
   // The status update above is the approval transaction's source of truth.
   // History, notifications and audit logging are secondary side effects and
   // must not make a successful approval/rejection appear to have failed.
   try {
-    const { error: historyError } = await supabase.from("approval_history").insert({
+    const { error: historyError } = await reviewWriter.from("approval_history").insert({
       document_id: doc.id,
       approver_id: userId,
       role: stageRole,
