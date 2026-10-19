@@ -136,7 +136,7 @@ function drawStamp(
     const labelWidth = width * 0.86;
     const labelHeight = height * 0.22;
     const labelX = x + (width - labelWidth) / 2;
-    const labelY = y + 18 + height * 0.67;
+    const labelY = y + 18 + height * 0.55;
     page.drawRectangle({
       x: labelX,
       y: labelY,
