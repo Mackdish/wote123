@@ -22,7 +22,7 @@ export const Route = createFileRoute("/")({
 
 const FEATURES = [
   { icon: FileCheck2, title: "Digital Submissions", desc: "Upload schemes of work, session plans, records of work and training programs in one place." },
-  { icon: Workflow, title: "Multi-Stage Approval", desc: "Trainer → HOD → Internal Quality Assurance → Deputy Principal, with full audit trail." },
+  { icon: Workflow, title: "Multi-Stage Approval", desc: "Trainer → Internal Quality Assurance → HOD, with a full audit trail." },
   { icon: ShieldCheck, title: "Quality Assurance", desc: "Compliance verification, curriculum alignment checks and quality recommendations." },
   { icon: BarChart3, title: "Reports & Analytics", desc: "Submission trends, approval timelines and department performance dashboards." },
   { icon: Bell, title: "Real-Time Notifications", desc: "Stay informed at every approval, rejection or correction request." },
@@ -31,9 +31,8 @@ const FEATURES = [
 
 const WORKFLOW_STEPS = [
   { n: 1, t: "Trainer submits", d: "Upload document with all academic metadata." },
-  { n: 2, t: "HOD reviews", d: "Approve and forward, or return with comments." },
-  { n: 3, t: "IQA checks compliance", d: "Curriculum alignment and quality assurance." },
-  { n: 4, t: "Deputy Principal approves", d: "Final approval and archiving." },
+  { n: 2, t: "IQA checks compliance", d: "Review curriculum alignment and quality; approve or return with correction comments." },
+  { n: 3, t: "HOD reviews", d: "Give departmental approval or return the document with required corrections." },
 ];
 
 const ANNOUNCEMENTS = [
@@ -182,7 +181,7 @@ function Landing() {
             <h2 className="mt-2 text-3xl font-bold text-foreground sm:text-4xl">The approval workflow</h2>
             <p className="mt-3 text-muted-foreground">Every document follows a transparent, traceable path before it is finally approved.</p>
           </div>
-          <ol className="mt-12 grid gap-x-8 gap-y-10 md:grid-cols-4">
+          <ol className="mt-12 grid gap-x-8 gap-y-10 md:grid-cols-3">
             {WORKFLOW_STEPS.map((s) => (
               <li key={s.n}>
                 <div className="flex items-center gap-3">
