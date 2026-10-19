@@ -8,6 +8,7 @@ export type StampInput = {
   role: "hod" | "iqa";
   approverName?: string | null;
   date?: string | null;
+  departmentName?: string | null;
 };
 
 const BLUE = rgb(0.12, 0.23, 0.54);
@@ -128,6 +129,19 @@ function drawStamp(
     font: fontReg,
     color: stampColor,
   });
+
+  if (stamp.role === "hod" && stamp.departmentName) {
+    const departmentLine = stamp.departmentName.toUpperCase();
+    const departmentSize = 8;
+    const departmentWidth = fontReg.widthOfTextAtSize(departmentLine, departmentSize);
+    page.drawText(departmentLine, {
+      x: x + (width - departmentWidth) / 2,
+      y: y + 4,
+      size: departmentSize,
+      font: fontReg,
+      color: PURPLE,
+    });
+  }
 
   // Verifier names are intentionally NOT printed on the stamp.
   return height + 34;
