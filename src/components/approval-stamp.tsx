@@ -47,7 +47,7 @@ export function ApprovalStamp({ role, approverName, date, departmentName }: Prop
               {dateLine}
             </div>
             {departmentName && (
-              <div className="absolute left-[7%] top-[32%] flex h-[22%] w-[86%] items-center justify-center bg-white px-1 text-center text-[10px] font-bold uppercase leading-tight text-[#6d2f92]">
+              <div className="absolute left-[4%] top-[43%] flex h-[20%] w-[92%] items-center justify-center bg-white px-1 text-center text-[10px] font-bold uppercase leading-tight text-[#6d2f92]">
                 {departmentName}
               </div>
             )}
