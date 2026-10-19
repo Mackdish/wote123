@@ -68,6 +68,10 @@ function DocPage() {
   }
 
   async function act(action: "approve" | "reject") {
+    if (action === "reject" && !comment.trim()) {
+      toast.error("Add a comment explaining what needs to be corrected before rejecting this document.");
+      return;
+    }
     setSubmitting(action);
     try {
       await review({ data: { document_id: id, action, comment: comment || null } });
@@ -249,9 +253,9 @@ function DocPage() {
         <Card>
           <CardHeader><CardTitle>Review</CardTitle></CardHeader>
           <CardContent className="space-y-3">
-            <Textarea placeholder="Comments / recommendations (optional for approval, expected for rejection)" value={comment} onChange={(e) => setComment(e.target.value)} maxLength={2000} rows={3} />
+            <Textarea placeholder="Comments / recommendations (optional for approval, required for rejection)" value={comment} onChange={(e) => setComment(e.target.value)} maxLength={2000} rows={3} />
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => act("reject")} disabled={submitting !== null}>
+              <Button variant="outline" onClick={() => act("reject")} disabled={submitting !== null || !comment.trim()}>
                 {submitting === "reject" ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <XCircle className="mr-2 h-4 w-4" />}Reject
               </Button>
               <Button onClick={() => act("approve")} disabled={submitting !== null}>
