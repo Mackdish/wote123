@@ -71,7 +71,7 @@ export const reviewDocument = createServerFn({ method: "POST" }).middleware([req
   if (error || !doc) throw new Error("Document not found"); if (!canViewDocumentRow(doc, roles, userId, departmentId)) throw new Error("You cannot access this document.");
   let nextStatus: DocumentStatus | null = null; let stageRole: AppRole | null = null;
   if (doc.status === "pending_iqa" && roles.includes("iqa") && departmentId && doc.department_id === departmentId) { stageRole = "iqa"; nextStatus = data.action === "approve" ? "pending_hod" : "rejected_iqa"; }
-  else if (doc.status === "pending_hod" && roles.includes("hod") && departmentId && doc.department_id === departmentId) { stageRole = "hod"; nextStatus = data.action === "approve" ? "approved" : "rejected_hod"; }
+  else if (doc.status === "pending_hod" && roles.includes("hod") && departmentId && doc.department_id === departmentId) { stageRole = "hod"; nextStatus = data.action === "approve" ? "approved" : "pending_iqa"; }
   else throw new Error("You cannot review this document at its current stage.");
   const { error: upErr } = await supabase.from("documents").update({ status: nextStatus }).eq("id", doc.id); if (upErr) throw new Error(upErr.message);
   // The status update above is the approval transaction's source of truth.
@@ -98,6 +98,10 @@ export const reviewDocument = createServerFn({ method: "POST" }).middleware([req
       `"${doc.title}" — ${data.action === "approve" ? "approved" : "rejected"} at ${stageRole.toUpperCase()} stage.`,
       `/documents/${doc.id}`,
     );
+    if (stageRole === "hod" && data.action === "reject") {
+      const iqaIds = await usersWithRole(supabase, "iqa", doc.department_id ?? null);
+      await notify(supabase, iqaIds, "Document returned for IQA re-review", `The HOD returned "${doc.title}". Please coordinate with the trainer on corrections before it proceeds to HOD review again.`, `/documents/${doc.id}`);
+    }
     if (data.action === "approve") {
       if (nextStatus === "pending_hod") {
         const hodIds = new Set<string>(await usersWithRole(supabase, "hod", doc.department_id ?? null));
