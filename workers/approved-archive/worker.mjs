@@ -232,7 +232,12 @@ async function buildArchive(job) {
       const stamped = await stampPdf(pdfBytes, itemStamps, name);
       folder.file(name.replace(/\.[^.]+$/, "") + "_stamped.pdf", stamped, { binary: true });
     } else {
-      folder.file(name, original, { binary: true });
+      // This archive is explicitly a stamped-document archive. Never include
+      // an original upload unchanged, because that would create an archive
+      // containing a mixture of stamped and unstamped files.
+      throw new Error(
+        `Cannot include "${name}" in the stamped archive: only PDF, DOCX and DOCM files can be stamped. Convert the file to one of these formats and retry.`,
+      );
     }
   }
 
