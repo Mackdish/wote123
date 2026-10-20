@@ -61,6 +61,17 @@ function drawStamp(page, image, font, stamp, x, y) {
   const height = image.height * (width / image.width);
   const dateLine = `DATE: ${stampDate(stamp)}: APPROVED`;
   page.drawImage(image, { x, y: y + 18, width, height });
+  if (stamp.role === "hod") {
+    // Hide the hard-coded "CIT DEPARTMENT" row in the legacy PNG template.
+    // Image row is ~36% from the top (64% from the bottom in PDF coordinates).
+    page.drawRectangle({
+      x: x + width * 0.04,
+      y: y + 18 + height * 0.59,
+      width: width * 0.92,
+      height: height * 0.13,
+      color: rgb(1, 1, 1),
+    });
+  }
   const color = stamp.role === "hod" ? PURPLE : BLUE;
   const fontSize = stamp.role === "hod" ? 9 : 8;
   const dateWidth = font.widthOfTextAtSize(dateLine, fontSize);
