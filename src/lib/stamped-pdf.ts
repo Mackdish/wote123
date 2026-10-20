@@ -134,12 +134,11 @@ function drawStamp(
     // The source stamp image contains a hard-coded "CIT DEPARTMENT" label.
     // Cover that inner label and print the actual department in the same position.
     const labelWidth = width * 0.92;
-    const labelHeight = height * 0.20;
+    // The source PNG's "CIT DEPARTMENT" text is about 36% down from its top.
+    // PDF coordinates grow upward, so cover the actual source-text row at ~64% of image height.
+    const labelHeight = height * 0.13;
     const labelX = x + (width - labelWidth) / 2;
-    // Deployment trigger: retain the HOD department-label correction in this stamping path.
-    // The template's hard-coded CIT DEPARTMENT sits below the dynamic label.
-    // Cover that row directly, leaving a clean blank department slot.
-    const labelY = y + 18 + height * 0.40;
+    const labelY = y + 18 + height * 0.59;
     page.drawRectangle({
       x: labelX,
       y: labelY,
